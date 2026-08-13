@@ -197,6 +197,14 @@ create policy "groups: select member"
   on public.groups for select
   using (public.is_group_member(id));
 
+-- Zusätzliche Policy: jeder eingeloggte Nutzer darf eine Gruppe per
+-- Invite-Code finden, um ihr beizutreten (er ist zu diesem Zeitpunkt
+-- noch kein Mitglied, "select member" würde das sonst blockieren).
+-- Beide SELECT-Policies sind permissiv und werden mit OR verknüpft.
+create policy "groups: select for join via invite code"
+  on public.groups for select
+  using (auth.uid() is not null);
+
 create policy "groups: insert authenticated"
   on public.groups for insert
   with check (auth.uid() is not null);
