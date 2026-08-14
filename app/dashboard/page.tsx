@@ -8,8 +8,9 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { getBestDaysForGroup } from "@/lib/actions";
+import { getBestDaysForGroup, getUpcomingEvents } from "@/lib/actions";
 import { DashboardCalendarClient } from "./DashboardCalendarClient";
+import { UpcomingEventsList } from "@/components/events/UpcomingEventsList";
 
 export default async function DashboardPage() {
   const supabase = await createServerSupabaseClient();
@@ -36,9 +37,10 @@ export default async function DashboardPage() {
   const daysInRange =
     (new Date(rangeEnd).getTime() - new Date(rangeStart).getTime()) / 86_400_000 + 1;
 
-  const [topDays, monthMatches] = await Promise.all([
+  const [topDays, monthMatches, upcomingEvents] = await Promise.all([
     getBestDaysForGroup(membership.group_id, { from: rangeStart, to: rangeEnd }, 3),
     getBestDaysForGroup(membership.group_id, { from: rangeStart, to: rangeEnd }, daysInRange),
+    getUpcomingEvents(membership.group_id),
   ]);
 
   return (
@@ -60,11 +62,15 @@ export default async function DashboardPage() {
         </Link>
       </header>
 
-      <DashboardCalendarClient
-        groupId={membership.group_id}
-        topDays={topDays}
-        monthMatches={monthMatches}
-      />
+      <div className="space-y-10">
+        <UpcomingEventsList events={upcomingEvents as any} />
+
+        <DashboardCalendarClient
+          groupId={membership.group_id}
+          topDays={topDays}
+          monthMatches={monthMatches}
+        />
+      </div>
     </main>
   );
 }

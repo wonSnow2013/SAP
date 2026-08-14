@@ -279,3 +279,156 @@ async function maybeNotifyDiscord(
     // Webhook-Fehler dürfen den Hauptflow nicht blockieren
   }
 }
+
+// =====================================================================
+// ADMIN: Benutzerverwaltung
+// =====================================================================
+// Alle Funktionen hier verlassen sich zusätzlich auf die RLS-Policies
+// "profiles: admin update all" (nur is_current_user_admin() darf andere
+// Profile ändern) - selbst wenn jemand versucht, diese Funktionen zu
+// missbrauchen, blockt die Datenbank nicht-Admins serverseitig ab.
+
+async function requireAdmin(supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>) {
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error("Nicht angemeldet.");
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", auth.user.id)
+    .single();
+
+  if (profile?.role !== "admin") throw new Error("Nur Admins dürfen das.");
+  return auth.user;
+}
+
+/** Admins UND Mods dürfen den Admin-Bereich sehen (nur Mutationen sind admin-only). */
+async function requireStaff(supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>) {
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error("Nicht angemeldet.");
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", auth.user.id)
+    .single();
+
+  if (profile?.role !== "admin" && profile?.role !== "mod") {
+    throw new Error("Kein Zugriff.");
+  }
+  return auth.user;
+}
+
+export async function adminApproveUser(userId: string) {
+  const supabase = await createServerSupabaseClient();
+  const admin = await requireAdmin(supabase);
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ is_approved: true, approved_at: new Date().toISOString(), approved_by: admin.id })
+    .eq("id", userId);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/admin/users");
+}
+
+export async function adminLockUser(userId: string) {
+  const supabase = await createServerSupabaseClient();
+  await requireAdmin(supabase);
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ is_approved: false })
+    .eq("id", userId);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/admin/users");
+}
+
+export async function adminSetRole(userId: string, role: "user" | "mod" | "admin") {
+  const supabase = await createServerSupabaseClient();
+  await requireAdmin(supabase);
+
+  const { error } = await supabase.from("profiles").update({ role }).eq("id", userId);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/admin/users");
+}
+
+/**
+ * Löscht einen Nutzer vollständig (Auth-Account + Profil via Cascade).
+ * Braucht den Service-Role-Client, weil das normale anon/RLS-Setup das
+ * Löschen von auth.users nicht erlaubt.
+ */
+export async function adminDeleteUser(userId: string) {
+  const supabase = await createServerSupabaseClient();
+  const admin = await requireAdmin(supabase);
+
+  if (userId === admin.id) {
+    throw new Error("Du kannst dich nicht selbst löschen.");
+  }
+
+  const { createAdminSupabaseClient } = await import("@/lib/supabase/admin");
+  const adminClient = createAdminSupabaseClient();
+
+  const { error } = await adminClient.auth.admin.deleteUser(userId);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/admin/users");
+}
+
+export async function getAllUsersForAdmin() {
+  const supabase = await createServerSupabaseClient();
+  await requireStaff(supabase);
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, email, display_name, role, is_approved, created_at, avatar_color, avatar_url")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+
+  return data;
+}
+
+// =====================================================================
+// EVENTS: Löschen (Admin/Mod oder Ersteller/Host, via RLS abgesichert)
+// =====================================================================
+
+export async function deleteEvent(eventId: string) {
+  const supabase = await createServerSupabaseClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error("Nicht angemeldet.");
+
+  const { error } = await supabase.from("events").delete().eq("id", eventId);
+  // RLS blockt automatisch, falls der Nutzer weder Staff noch
+  // Ersteller/Host ist - error.message ist in dem Fall generisch von
+  // Postgres, daher hier eine sprechendere Meldung.
+  if (error) {
+    throw new Error(
+      "Löschen nicht möglich (fehlende Berechtigung oder Datenbankfehler): " + error.message
+    );
+  }
+
+  revalidatePath("/dashboard");
+}
+
+/** Alle anstehenden (nicht abgesagten) Events einer Gruppe, für das Dashboard. */
+export async function getUpcomingEvents(groupId: string) {
+  const supabase = await createServerSupabaseClient();
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { data, error } = await supabase
+    .from("events")
+    .select(
+      `id, event_date, start_time, end_time, status, match_score, host_id, host_capacity,
+       games(title),
+       event_participants(user_id, status)`
+    )
+    .eq("group_id", groupId)
+    .neq("status", "cancelled")
+    .gte("event_date", today)
+    .order("event_date", { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return data;
+}

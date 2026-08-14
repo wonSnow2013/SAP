@@ -4,13 +4,19 @@
 
 export type Preference = 1 | 2 | 3; // 1 = wenn's sein muss, 2 = gerne, 3 = richtig Bock
 
+export type UserRole = "user" | "mod" | "admin";
+
 export interface Profile {
   id: string;
+  email?: string | null;
   displayName: string;
   avatarColor: string;
+  avatarUrl?: string | null;
   address?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  role: UserRole;
+  isApproved: boolean;
 }
 
 /** Ein einzelnes, normalisiertes Zeitfenster eines Users an einem Tag. */

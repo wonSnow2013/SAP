@@ -8,6 +8,7 @@ import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getBestDaysForGroup } from "@/lib/actions";
 import { EventPlanner } from "@/components/events/EventPlanner";
+import { BackToDashboard } from "@/components/layout/BackToDashboard";
 import type { Profile } from "@/types";
 
 export default async function NewEventPage({
@@ -25,7 +26,7 @@ export default async function NewEventPage({
   const [{ data: memberRows }, dayMatches] = await Promise.all([
     supabase
       .from("group_members")
-      .select("profiles(id, display_name, avatar_color)")
+      .select("profiles(id, display_name, avatar_color, avatar_url)")
       .eq("group_id", groupId),
     getBestDaysForGroup(groupId, { from: date, to: date }, 1),
   ]);
@@ -34,6 +35,9 @@ export default async function NewEventPage({
     id: row.profiles.id,
     displayName: row.profiles.display_name,
     avatarColor: row.profiles.avatar_color,
+    avatarUrl: row.profiles.avatar_url,
+    role: "user",
+    isApproved: true,
   }));
 
   const dayMatch = dayMatches[0] ?? {
@@ -47,6 +51,7 @@ export default async function NewEventPage({
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-8">
+      <BackToDashboard />
       <EventPlanner
         groupId={groupId}
         dayMatch={dayMatch}

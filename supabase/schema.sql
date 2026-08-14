@@ -19,11 +19,18 @@ create table public.groups (
 -- Erweiterung des Supabase-Auth-Users um App-Profildaten
 create table public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
+  email text,
   display_name text not null,
   avatar_color text default '#6366f1', -- Hex-Farbe als einfacher Avatar
+  avatar_url text,                     -- optionales hochgeladenes Avatar-Bild
   address text,                        -- optional, für Host-Vorschläge
   latitude numeric,
   longitude numeric,
+  -- Globales Berechtigungssystem (App-weit, nicht pro Gruppe):
+  role text not null default 'user' check (role in ('user', 'mod', 'admin')),
+  is_approved boolean not null default false,
+  approved_at timestamptz,
+  approved_by uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now()
 );
 
@@ -159,7 +166,10 @@ alter table public.event_participants enable row level security;
 alter table public.event_food_items enable row level security;
 alter table public.group_integrations enable row level security;
 
--- Hilfsfunktion: Ist der aktuelle User Mitglied dieser Gruppe?
+-- Hilfsfunktion: Ist der aktuelle User Mitglied dieser Gruppe UND global
+-- durch einen Admin freigegeben? Freigabe ist app-weit (nicht pro Gruppe) -
+-- durch die Kopplung hier greift der Freigabe-Workflow automatisch in
+-- ALLEN Policies, die is_group_member() bereits verwenden.
 create or replace function public.is_group_member(_group_id uuid)
 returns boolean
 language sql
@@ -167,10 +177,98 @@ security definer
 stable
 as $$
   select exists (
-    select 1 from public.group_members
-    where group_id = _group_id and user_id = auth.uid()
+    select 1
+    from public.group_members gm
+    join public.profiles p on p.id = gm.user_id
+    where gm.group_id = _group_id
+      and gm.user_id = auth.uid()
+      and p.is_approved = true
   );
 $$;
+
+-- Ist der aktuelle User Admin? (security definer, um RLS-Rekursion beim
+-- Nachschlagen der eigenen profiles-Zeile zu vermeiden)
+create or replace function public.is_current_user_admin()
+returns boolean
+language sql
+security definer
+stable
+as $$
+  select exists (
+    select 1 from public.profiles where id = auth.uid() and role = 'admin'
+  );
+$$;
+
+-- Ist der aktuelle User Admin ODER Mod (und freigegeben)? Für Rechte wie
+-- "beliebige Events löschen".
+create or replace function public.is_staff_user()
+returns boolean
+language sql
+security definer
+stable
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role in ('admin', 'mod') and is_approved = true
+  );
+$$;
+
+-- Verhindert, dass sich Nutzer selbst role/is_approved hochstufen, indem
+-- sie einen normalen Profil-Update-Call (z. B. Namensänderung) mit
+-- manipulierten Zusatzfeldern absenden. Nur Admins dürfen diese Felder
+-- verändern (durchgesetzt server-seitig im Trigger, nicht nur im Frontend).
+create or replace function public.prevent_self_privilege_escalation()
+returns trigger
+language plpgsql
+security definer
+as $$
+begin
+  if (new.role is distinct from old.role or new.is_approved is distinct from old.is_approved)
+     and not public.is_current_user_admin() then
+    raise exception 'Nur Admins dürfen Rolle oder Freigabestatus ändern.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_prevent_privilege_escalation on public.profiles;
+create trigger trg_prevent_privilege_escalation
+  before update on public.profiles
+  for each row execute function public.prevent_self_privilege_escalation();
+
+-- Legt bei jeder Neuregistrierung automatisch eine profiles-Zeile an.
+-- Der allererste registrierte User wird automatisch Admin + freigegeben,
+-- alle weiteren starten als 'user' mit is_approved = false.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  is_first boolean;
+begin
+  select not exists(select 1 from public.profiles) into is_first;
+
+  insert into public.profiles (id, email, display_name, role, is_approved, approved_at)
+  values (
+    new.id,
+    new.email,
+    coalesce(new.raw_user_meta_data->>'display_name', split_part(new.email, '@', 1)),
+    case when is_first then 'admin' else 'user' end,
+    is_first,
+    case when is_first then now() else null end
+  )
+  on conflict (id) do nothing;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
 
 -- Profile: jeder darf Profile von Gruppenmitgliedern sehen, nur eigenes bearbeiten
 create policy "profiles: view group members"
@@ -184,9 +282,22 @@ create policy "profiles: view group members"
     )
   );
 
+-- Admins UND Mods sehen ALLE Profile (auch von Usern, die noch in keiner
+-- Gruppe sind und auf Freigabe warten) - nötig für /admin/users.
+create policy "profiles: staff view all"
+  on public.profiles for select
+  using (public.is_staff_user());
+
 create policy "profiles: update own"
   on public.profiles for update
-  using (id = auth.uid());
+  using (id = auth.uid())
+  with check (id = auth.uid());
+
+-- Admins dürfen JEDES Profil bearbeiten (Freigabe, Rollenänderung, Sperren).
+create policy "profiles: admin update all"
+  on public.profiles for update
+  using (public.is_current_user_admin())
+  with check (public.is_current_user_admin());
 
 create policy "profiles: insert own"
   on public.profiles for insert
@@ -197,13 +308,14 @@ create policy "groups: select member"
   on public.groups for select
   using (public.is_group_member(id));
 
--- Zusätzliche Policy: jeder eingeloggte Nutzer darf eine Gruppe per
--- Invite-Code finden, um ihr beizutreten (er ist zu diesem Zeitpunkt
--- noch kein Mitglied, "select member" würde das sonst blockieren).
--- Beide SELECT-Policies sind permissiv und werden mit OR verknüpft.
+-- Zusätzliche Policy: jeder eingeloggte, freigegebene Nutzer darf eine
+-- Gruppe per Invite-Code finden, um ihr beizutreten.
 create policy "groups: select for join via invite code"
   on public.groups for select
-  using (auth.uid() is not null);
+  using (
+    auth.uid() is not null
+    and exists (select 1 from public.profiles where id = auth.uid() and is_approved = true)
+  );
 
 create policy "groups: insert authenticated"
   on public.groups for insert
@@ -219,7 +331,7 @@ create policy "group_members: insert self via invite"
   with check (user_id = auth.uid());
 
 -- Generisches Muster für alle gruppengebundenen Tabellen:
--- SELECT/INSERT/UPDATE/DELETE nur für Mitglieder der jeweiligen Gruppe.
+-- SELECT/INSERT/UPDATE/DELETE nur für freigegebene Mitglieder der Gruppe.
 create policy "recurring_availability: crud own within group"
   on public.recurring_availability for all
   using (public.is_group_member(group_id))
@@ -249,9 +361,30 @@ create policy "events: select group"
 create policy "events: insert group"
   on public.events for insert
   with check (public.is_group_member(group_id));
-create policy "events: update group"
+-- Normale Mitglieder dürfen nur Events bearbeiten, die sie selbst erstellt
+-- haben oder bei denen sie Host sind. Admins/Mods dürfen JEDES Event
+-- bearbeiten (zweite, mit OR verknüpfte Policy).
+create policy "events: update own or hosted"
   on public.events for update
-  using (public.is_group_member(group_id));
+  using (
+    public.is_group_member(group_id)
+    and (created_by = auth.uid() or host_id = auth.uid())
+  );
+create policy "events: staff update any"
+  on public.events for update
+  using (public.is_staff_user());
+-- Löschen war bisher gar nicht erlaubt (keine Policy = RLS blockiert
+-- Deletes komplett) - jetzt für Ersteller/Host UND zusätzlich für
+-- Admins/Mods freigeschaltet (zwei mit OR verknüpfte Policies).
+create policy "events: own or hosted delete"
+  on public.events for delete
+  using (
+    public.is_group_member(group_id)
+    and (created_by = auth.uid() or host_id = auth.uid())
+  );
+create policy "events: staff delete"
+  on public.events for delete
+  using (public.is_staff_user());
 
 create policy "event_participants: select via event group"
   on public.event_participants for select
@@ -296,3 +429,37 @@ select
   ra.end_time,
   ra.preference
 from public.recurring_availability ra;
+
+-- =====================================================================
+-- 8. STORAGE: Avatar-Uploads
+-- =====================================================================
+insert into storage.buckets (id, name, public)
+values ('avatars', 'avatars', true)
+on conflict (id) do nothing;
+
+create policy "avatars: public read"
+  on storage.objects for select
+  using (bucket_id = 'avatars');
+
+-- Jeder Nutzer darf nur in einen Ordner mit seiner eigenen user_id schreiben
+-- (erwarteter Pfad: "<user_id>/avatar.png")
+create policy "avatars: owner upload"
+  on storage.objects for insert
+  with check (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+create policy "avatars: owner update"
+  on storage.objects for update
+  using (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+create policy "avatars: owner delete"
+  on storage.objects for delete
+  using (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );

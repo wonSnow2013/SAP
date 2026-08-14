@@ -8,9 +8,26 @@
 // =====================================================================
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { Users, Clock, Dices, CalendarPlus, Check, X, HelpCircle } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import {
+  Users,
+  Clock,
+  Dices,
+  CalendarPlus,
+  Check,
+  X,
+  HelpCircle,
+  Loader2,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createEvent, respondToEvent, suggestGamesForEvent } from "@/lib/actions";
+import {
+  createEvent,
+  respondToEvent,
+  suggestGamesForEvent,
+  deleteEvent,
+} from "@/lib/actions";
 import type { DayMatch, Game, GameEvent, Profile } from "@/types";
 
 interface EventPlannerProps {
@@ -19,6 +36,8 @@ interface EventPlannerProps {
   members: Profile[];
   existingEvent?: GameEvent;
   currentUserId: string;
+  /** Ob der aktuelle Nutzer dieses Event löschen darf (Admin/Mod/Ersteller/Host). */
+  canDelete?: boolean;
 }
 
 export function EventPlanner({
@@ -27,12 +46,31 @@ export function EventPlanner({
   members,
   existingEvent,
   currentUserId,
+  canDelete = false,
 }: EventPlannerProps) {
+  const router = useRouter();
   const [hostId, setHostId] = useState(existingEvent?.hostId ?? members[0]?.id ?? "");
   const [hostCapacity, setHostCapacity] = useState(existingEvent?.hostCapacity ?? 6);
   const [selectedGameId, setSelectedGameId] = useState(existingEvent?.gameId ?? "");
   const [suggestedGames, setSuggestedGames] = useState<Game[]>([]);
   const [isPending, startTransition] = useTransition();
+  const [isDeleting, startDeleteTransition] = useTransition();
+
+  // Uhrzeit ist ein Vorschlag aus dem Match-Fenster, aber frei editierbar -
+  // z. B. wenn die Gruppe lieber früher anfangen will als "nötig" wäre.
+  const [startTime, setStartTime] = useState(
+    existingEvent?.startTime ?? dayMatch.bestWindow?.startTime ?? "18:00"
+  );
+  const [endTime, setEndTime] = useState(
+    existingEvent?.endTime ?? dayMatch.bestWindow?.endTime ?? "22:00"
+  );
+
+  const availableMinutes = useMemo(() => {
+    const [sh, sm] = startTime.split(":").map(Number);
+    const [eh, em] = endTime.split(":").map(Number);
+    const minutes = eh * 60 + em - (sh * 60 + sm);
+    return minutes > 0 ? minutes : 180;
+  }, [startTime, endTime]);
 
   const acceptedCount =
     existingEvent?.participants.filter((p) => p.status === "accepted").length ??
@@ -40,22 +78,46 @@ export function EventPlanner({
     members.length;
 
   useEffect(() => {
-    const minutes = dayMatch.bestWindow?.durationMinutes ?? 180;
-    suggestGamesForEvent(groupId, acceptedCount, minutes).then(setSuggestedGames);
-  }, [groupId, acceptedCount, dayMatch.bestWindow]);
+    suggestGamesForEvent(groupId, acceptedCount, availableMinutes).then(setSuggestedGames);
+  }, [groupId, acceptedCount, availableMinutes]);
 
   function handleCreateEvent() {
+    if (endTime <= startTime) {
+      toast.error("Die Endzeit muss nach der Startzeit liegen.");
+      return;
+    }
     startTransition(async () => {
-      await createEvent({
-        groupId,
-        eventDate: dayMatch.date,
-        startTime: dayMatch.bestWindow?.startTime ?? "18:00",
-        endTime: dayMatch.bestWindow?.endTime,
-        hostId,
-        hostCapacity,
-        gameId: selectedGameId || undefined,
-        matchScore: dayMatch.matchScore,
-      });
+      try {
+        const event = await createEvent({
+          groupId,
+          eventDate: dayMatch.date,
+          startTime,
+          endTime,
+          hostId,
+          hostCapacity,
+          gameId: selectedGameId || undefined,
+          matchScore: dayMatch.matchScore,
+        });
+        toast.success("Spielabend erfolgreich fixiert!");
+        router.push(`/events/${event.id}`);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Fixieren fehlgeschlagen.");
+      }
+    });
+  }
+
+  function handleDeleteEvent() {
+    if (!existingEvent) return;
+    if (!confirm("Diesen Spielabend wirklich löschen?")) return;
+
+    startDeleteTransition(async () => {
+      try {
+        await deleteEvent(existingEvent.id);
+        toast.success("Spielabend gelöscht.");
+        router.push("/dashboard");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Löschen fehlgeschlagen.");
+      }
     });
   }
 
@@ -82,10 +144,59 @@ export function EventPlanner({
             </span>
           </p>
         </div>
-        <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-700">
-          Match {dayMatch.matchScore.toFixed(0)}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-700">
+            Match {dayMatch.matchScore.toFixed(0)}
+          </span>
+          {existingEvent && canDelete && (
+            <button
+              onClick={handleDeleteEvent}
+              disabled={isDeleting}
+              title="Event löschen"
+              className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+            >
+              {isDeleting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+            </button>
+          )}
+        </div>
       </header>
+
+      {/* Editierbare Uhrzeit */}
+      <section>
+        <h3 className="mb-2 text-sm font-semibold text-slate-700">Uhrzeit</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="mb-1 block text-xs text-slate-500">Von</label>
+            <input
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              disabled={!!existingEvent}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-500">Bis</label>
+            <input
+              type="time"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              disabled={!!existingEvent}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+            />
+          </div>
+        </div>
+        {!existingEvent && dayMatch.bestWindow && (
+          <p className="mt-1.5 text-xs text-slate-400">
+            Vorschlag basierend auf dem besten Überlapp-Fenster – du kannst die Zeit
+            aber frei anpassen.
+          </p>
+        )}
+      </section>
 
       {/* Host-Auswahl */}
       <section>
@@ -127,8 +238,7 @@ export function EventPlanner({
       <section>
         <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
           <Dices className="h-4 w-4" />
-          Passende Spiele ({acceptedCount} Spieler, ~
-          {Math.round((dayMatch.bestWindow?.durationMinutes ?? 180) / 60)}h Zeit)
+          Passende Spiele ({acceptedCount} Spieler, ~{Math.round(availableMinutes / 60)}h Zeit)
         </h3>
         {suggestedGames.length === 0 ? (
           <p className="text-sm text-slate-400">
@@ -179,8 +289,12 @@ export function EventPlanner({
           disabled={isPending || !hostId}
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 py-3 text-sm font-semibold text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
         >
-          <CalendarPlus className="h-4 w-4" />
-          {isPending ? "Wird erstellt…" : "Spielabend fixieren"}
+          {isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <CalendarPlus className="h-4 w-4" />
+          )}
+          {isPending ? "Wird fixiert…" : "Spielabend fixieren"}
         </button>
       )}
     </div>
