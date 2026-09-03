@@ -2,7 +2,7 @@
 
 // =====================================================================
 // FoodPlanner
-// Einfache Checkliste: Gruppenmitglieder tragen ein, was sie mitbringen.
+// Einfache Checkliste: wer bringt was mit fürs Event.
 // =====================================================================
 
 import { useState, useTransition } from "react";

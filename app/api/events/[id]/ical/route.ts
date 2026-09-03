@@ -15,7 +15,7 @@ export async function GET(
 
   const { data: event, error } = await supabase
     .from("events")
-    .select("*, games(title), groups(name)")
+    .select("*, games(title)")
     .eq("id", id)
     .single();
 
@@ -24,13 +24,12 @@ export async function GET(
   }
 
   const dtStart = toIcalDateTime(event.event_date, event.start_time);
+  const endDate = event.end_time_next_day ? addDays(event.event_date, 1) : event.event_date;
   const dtEnd = event.end_time
-    ? toIcalDateTime(event.event_date, event.end_time)
+    ? toIcalDateTime(endDate, event.end_time)
     : toIcalDateTime(event.event_date, addHours(event.start_time, 3));
 
-  const title = event.games?.title
-    ? `Spielabend: ${event.games.title}`
-    : "Spielabend";
+  const title = event.games?.title ? `Spielabend: ${event.games.title}` : "Spielabend";
 
   const ics = [
     "BEGIN:VCALENDAR",
@@ -42,7 +41,7 @@ export async function GET(
     `DTSTART:${dtStart}`,
     `DTEND:${dtEnd}`,
     `SUMMARY:${escapeIcal(title)}`,
-    `DESCRIPTION:${escapeIcal(`Spielabend der Gruppe ${event.groups?.name ?? ""}`)}`,
+    "DESCRIPTION:Spielabend",
     "END:VEVENT",
     "END:VCALENDAR",
   ].join("\r\n");
@@ -56,13 +55,19 @@ export async function GET(
 }
 
 function toIcalDateTime(date: string, time: string): string {
-  return `${date.replace(/-/g, "")}T${time.replace(":", "")}00`;
+  return `${date.replace(/-/g, "")}T${time.replace(":", "").slice(0, 4)}00`;
 }
 
 function addHours(time: string, hours: number): string {
   const [h, m] = time.split(":").map(Number);
   const total = (h + hours) % 24;
   return `${total.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
+}
+
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 function escapeIcal(text: string): string {

@@ -1,8 +1,7 @@
 // =====================================================================
 // /events/[id] · Server Component
-// Zeigt ein fixiertes Event: Host, Spiel, Zusagen, Uhrzeit, Food-Planer.
-// Löschen ist sichtbar, wenn der Nutzer Admin/Mod ODER Ersteller/Host ist
-// (die eigentliche Durchsetzung passiert zusätzlich per RLS in der DB).
+// Zeigt ein fixiertes Event. Löschen sichtbar für Admin/Mod ODER
+// Ersteller/Host (RLS erzwingt das zusätzlich auf DB-Ebene).
 // =====================================================================
 
 import { notFound, redirect } from "next/navigation";
@@ -24,7 +23,7 @@ export default async function EventDetailPage({
   const { data: event, error } = await supabase
     .from("events")
     .select(
-      `id, group_id, event_date, start_time, end_time, host_id, host_capacity,
+      `id, event_date, start_time, end_time, end_time_next_day, host_id, host_capacity,
        game_id, status, match_score, created_by,
        event_participants(user_id, status, responded_at)`
     )
@@ -33,30 +32,27 @@ export default async function EventDetailPage({
 
   if (error || !event) notFound();
 
-  const [{ data: memberRows }, { data: myProfile }] = await Promise.all([
-    supabase
-      .from("group_members")
-      .select("profiles(id, display_name, avatar_color, avatar_url)")
-      .eq("group_id", event.group_id),
+  const [{ data: profileRows }, { data: myProfile }] = await Promise.all([
+    supabase.from("profiles").select("id, display_name, avatar_color, avatar_url").eq("is_approved", true),
     supabase.from("profiles").select("role").eq("id", auth.user.id).single(),
   ]);
 
-  const members: Profile[] = (memberRows ?? []).map((row: any) => ({
-    id: row.profiles.id,
-    displayName: row.profiles.display_name,
-    avatarColor: row.profiles.avatar_color,
-    avatarUrl: row.profiles.avatar_url,
+  const members: Profile[] = (profileRows ?? []).map((row: any) => ({
+    id: row.id,
+    displayName: row.display_name,
+    avatarColor: row.avatar_color,
+    avatarUrl: row.avatar_url,
     role: "user",
     isApproved: true,
   }));
 
   const gameEvent: GameEvent = {
     id: event.id,
-    groupId: event.group_id,
     title: "Spielabend",
     eventDate: event.event_date,
     startTime: event.start_time,
     endTime: event.end_time,
+    endTimeNextDay: event.end_time_next_day,
     hostId: event.host_id,
     hostCapacity: event.host_capacity,
     gameId: event.game_id,
@@ -74,9 +70,10 @@ export default async function EventDetailPage({
     date: event.event_date,
     matchScore: event.match_score ?? 0,
     bestWindow: {
-      date: event.event_date,
-      startTime: event.start_time,
-      endTime: event.end_time ?? event.start_time,
+      startAt: `${event.event_date}T${event.start_time}`,
+      endAt: `${event.end_time_next_day ? addDays(event.event_date, 1) : event.event_date}T${
+        event.end_time ?? event.start_time
+      }`,
       durationMinutes: 0,
       participantIds: gameEvent.participants
         .filter((p) => p.status === "accepted")
@@ -95,7 +92,6 @@ export default async function EventDetailPage({
     <main className="mx-auto max-w-2xl px-4 py-8">
       <BackToDashboard />
       <EventPlanner
-        groupId={event.group_id}
         dayMatch={dayMatch}
         members={members}
         existingEvent={gameEvent}
@@ -104,4 +100,10 @@ export default async function EventDetailPage({
       />
     </main>
   );
+}
+
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }

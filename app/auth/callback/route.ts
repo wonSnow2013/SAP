@@ -1,9 +1,3 @@
-// =====================================================================
-// GET /auth/callback · Route Handler
-// Tauscht den Code aus dem Magic-Link gegen eine Supabase-Session und
-// leitet danach ins Onboarding bzw. Dashboard weiter.
-// =====================================================================
-
 import { NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -15,7 +9,10 @@ export async function GET(request: Request) {
     const supabase = await createServerSupabaseClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      return NextResponse.redirect(`${origin}/onboarding`);
+      // Kein Onboarding mehr nötig (kein Gruppen-System) - Middleware
+      // kümmert sich darum, nicht freigegebene User zu /pending-approval
+      // umzuleiten, alle anderen landen direkt im globalen Dashboard.
+      return NextResponse.redirect(`${origin}/dashboard`);
     }
   }
 

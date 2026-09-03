@@ -3,11 +3,12 @@
 // =====================================================================
 // AvailabilityForm
 // Zwei Tabs: (1) wiederkehrende Wochen-Verfügbarkeit, (2) konkretes
-// Datum mit Zeitfenster, Präferenz oder Sperrtag-Markierung.
+// Datum. Unterstützt Zeitfenster über Mitternacht: wenn Endzeit <=
+// Startzeit, wird automatisch "Folgetag" angenommen (mit Hinweis).
 // =====================================================================
 
 import { useState, useTransition } from "react";
-import { CalendarX2, CalendarClock, Flame, ThumbsUp, Meh } from "lucide-react";
+import { CalendarX2, CalendarClock, Flame, ThumbsUp, Meh, Moon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { upsertRecurringAvailability, upsertDateAvailability } from "@/lib/actions";
 import type { Preference } from "@/types";
@@ -21,11 +22,10 @@ const PREFERENCE_OPTIONS: { value: Preference; label: string; icon: typeof Flame
 ];
 
 interface AvailabilityFormProps {
-  groupId: string;
   onSaved?: () => void;
 }
 
-export function AvailabilityForm({ groupId, onSaved }: AvailabilityFormProps) {
+export function AvailabilityForm({ onSaved }: AvailabilityFormProps) {
   const [tab, setTab] = useState<"recurring" | "date">("date");
 
   return (
@@ -40,9 +40,9 @@ export function AvailabilityForm({ groupId, onSaved }: AvailabilityFormProps) {
       </div>
 
       {tab === "date" ? (
-        <DateAvailabilityTab groupId={groupId} onSaved={onSaved} />
+        <DateAvailabilityTab onSaved={onSaved} />
       ) : (
-        <RecurringAvailabilityTab groupId={groupId} onSaved={onSaved} />
+        <RecurringAvailabilityTab onSaved={onSaved} />
       )}
     </div>
   );
@@ -73,11 +73,18 @@ function TabButton({
   );
 }
 
-// -----------------------------------------------------------------------
-// Tab 1: Konkretes Datum
-// -----------------------------------------------------------------------
+function OvernightHint({ startTime, endTime }: { startTime: string; endTime: string }) {
+  const spansNextDay = endTime <= startTime;
+  if (!spansNextDay) return null;
+  return (
+    <p className="mt-1.5 flex items-center gap-1.5 text-xs text-violet-600">
+      <Moon className="h-3.5 w-3.5" />
+      Geht über Mitternacht – endet am Folgetag um {endTime} Uhr.
+    </p>
+  );
+}
 
-function DateAvailabilityTab({ groupId, onSaved }: AvailabilityFormProps) {
+function DateAvailabilityTab({ onSaved }: AvailabilityFormProps) {
   const [date, setDate] = useState("");
   const [status, setStatus] = useState<"available" | "blocked" | "maybe">("available");
   const [startTime, setStartTime] = useState("18:00");
@@ -97,7 +104,6 @@ function DateAvailabilityTab({ groupId, onSaved }: AvailabilityFormProps) {
     startTransition(async () => {
       try {
         await upsertDateAvailability({
-          groupId,
           date,
           status,
           startTime: status === "available" ? startTime : undefined,
@@ -172,6 +178,7 @@ function DateAvailabilityTab({ groupId, onSaved }: AvailabilityFormProps) {
               />
             </div>
           </div>
+          <OvernightHint startTime={startTime} endTime={endTime} />
 
           <div>
             <label className="mb-2 block text-sm font-medium text-slate-700">
@@ -223,12 +230,8 @@ function DateAvailabilityTab({ groupId, onSaved }: AvailabilityFormProps) {
   );
 }
 
-// -----------------------------------------------------------------------
-// Tab 2: Wiederkehrende Verfügbarkeit
-// -----------------------------------------------------------------------
-
-function RecurringAvailabilityTab({ groupId, onSaved }: AvailabilityFormProps) {
-  const [weekday, setWeekday] = useState(2); // Dienstag
+function RecurringAvailabilityTab({ onSaved }: AvailabilityFormProps) {
+  const [weekday, setWeekday] = useState(2);
   const [startTime, setStartTime] = useState("18:00");
   const [endTime, setEndTime] = useState("23:00");
   const [preference, setPreference] = useState<Preference>(2);
@@ -240,7 +243,7 @@ function RecurringAvailabilityTab({ groupId, onSaved }: AvailabilityFormProps) {
     setError(null);
     startTransition(async () => {
       try {
-        await upsertRecurringAvailability({ groupId, weekday, startTime, endTime, preference });
+        await upsertRecurringAvailability({ weekday, startTime, endTime, preference });
         onSaved?.();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Fehler beim Speichern.");
@@ -285,6 +288,7 @@ function RecurringAvailabilityTab({ groupId, onSaved }: AvailabilityFormProps) {
           />
         </div>
       </div>
+      <OvernightHint startTime={startTime} endTime={endTime} />
 
       <div>
         <label className="mb-2 block text-sm font-medium text-slate-700">Standard-Lust</label>

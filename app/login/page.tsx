@@ -1,11 +1,5 @@
 "use client";
 
-// =====================================================================
-// /login · Client Component
-// Magic-Link-Login über Supabase Auth. Nach Klick auf den Link in der
-// E-Mail landet der Nutzer via /auth/callback wieder in der App.
-// =====================================================================
-
 import { useState } from "react";
 import { Dices, Mail, CheckCircle2 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";

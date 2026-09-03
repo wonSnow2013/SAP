@@ -1,9 +1,3 @@
-// =====================================================================
-// /admin/users · Server Component
-// Zugriff ist bereits durch die Middleware auf role in ('admin','mod')
-// beschränkt. Lädt alle Profile und rendert die interaktive Tabelle.
-// =====================================================================
-
 import { getAllUsersForAdmin } from "@/lib/actions";
 import { AdminUserTable } from "@/components/admin/AdminUserTable";
 import { BackToDashboard } from "@/components/layout/BackToDashboard";

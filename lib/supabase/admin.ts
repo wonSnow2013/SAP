@@ -1,13 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
 /**
- * Supabase-Client mit Service-Role-Key. NUR serverseitig verwenden
- * (Server Actions / Route Handlers) - dieser Client umgeht RLS komplett.
- * Niemals in eine Client Component importieren oder den Key mit
- * NEXT_PUBLIC_ prefixen.
- *
- * Wird u. a. gebraucht, um Auth-User wirklich zu löschen
- * (supabase.auth.admin.deleteUser) - das kann der normale anon-Key nicht.
+ * Supabase-Client mit Service-Role-Key. NUR serverseitig verwenden -
+ * umgeht RLS komplett. Wird für supabase.auth.admin.deleteUser() gebraucht.
  */
 export function createAdminSupabaseClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;

@@ -1,11 +1,5 @@
 "use client";
 
-// =====================================================================
-// AdminUserTable
-// Zeigt alle Nutzer mit Freigabe-Status, Rolle, und Aktionen. Jede
-// Aktion ruft eine Server Action auf und gibt Toast-Feedback.
-// =====================================================================
-
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Check, Lock, Trash2, ShieldAlert } from "lucide-react";
@@ -51,18 +45,14 @@ export function AdminUserTable({ initialUsers }: { initialUsers: AdminUser[] }) 
   function handleApprove(user: AdminUser) {
     runAction(user.id, `${user.display_name} freigegeben.`, async () => {
       await adminApproveUser(user.id);
-      setUsers((prev) =>
-        prev.map((u) => (u.id === user.id ? { ...u, is_approved: true } : u))
-      );
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, is_approved: true } : u)));
     });
   }
 
   function handleLock(user: AdminUser) {
     runAction(user.id, `${user.display_name} gesperrt.`, async () => {
       await adminLockUser(user.id);
-      setUsers((prev) =>
-        prev.map((u) => (u.id === user.id ? { ...u, is_approved: false } : u))
-      );
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, is_approved: false } : u)));
     });
   }
 
@@ -74,9 +64,12 @@ export function AdminUserTable({ initialUsers }: { initialUsers: AdminUser[] }) 
   }
 
   function handleDelete(user: AdminUser) {
-    if (!confirm(`${user.display_name} wirklich endgültig löschen? Das kann nicht rückgängig gemacht werden.`)) {
+    if (
+      !confirm(
+        `${user.display_name} wirklich endgültig löschen? Das kann nicht rückgängig gemacht werden.`
+      )
+    )
       return;
-    }
     runAction(user.id, `${user.display_name} gelöscht.`, async () => {
       await adminDeleteUser(user.id);
       setUsers((prev) => prev.filter((u) => u.id !== user.id));

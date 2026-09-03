@@ -38,8 +38,6 @@ export default async function RootLayout({
     }
   }
 
-  // Navbar nur zeigen, wenn eingeloggt UND freigegeben (auf /login und
-  // /pending-approval wäre eine Navigation ohnehin nutzlos/verwirrend).
   const showNavbar = !!profile?.isApproved;
 
   return (

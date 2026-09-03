@@ -2,18 +2,18 @@
 
 // =====================================================================
 // MatchScoreCalendar
-// Zeigt die Top-3-Tage der Gruppe als hervorgehobene Karten + eine
-// kompakte Monatsansicht, in der jeder Tag anhand seines Match-Scores
-// eingefärbt ist. Klick auf einen Tag öffnet den Event-Planner.
+// Zeigt die Top-3-Tage als hervorgehobene Karten + eine Monatsansicht,
+// eingefärbt nach Match-Score. OverlapWindow nutzt jetzt startAt/endAt
+// (volle ISO-Timestamps) statt startTime/endTime, damit Über-Mitternacht-
+// Fenster korrekt dargestellt werden.
 // =====================================================================
 
 import { useMemo, useState } from "react";
-import { Sparkles, Users, Clock, ChevronLeft, ChevronRight } from "lucide-react";
+import { Sparkles, Users, Clock, ChevronLeft, ChevronRight, Moon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DayMatch } from "@/types";
 
 interface MatchScoreCalendarProps {
-  /** Match-Ergebnisse für ALLE Tage im sichtbaren Monat (nicht nur Top 3). */
   monthMatches: DayMatch[];
   topDays: DayMatch[];
   onSelectDay: (date: string) => void;
@@ -26,6 +26,16 @@ function scoreToColor(score: number): string {
   if (score >= 25) return "bg-amber-200 text-amber-900";
   if (score > 0) return "bg-slate-200 text-slate-600";
   return "bg-slate-50 text-slate-300";
+}
+
+/** "HH:mm" aus einem ISO-Timestamp extrahieren (UTC, da wir intern konsequent in UTC rechnen). */
+function timeOf(iso: string): string {
+  return iso.slice(11, 16);
+}
+
+/** Geht das Fenster über Mitternacht (Start- und Endtag unterschiedlich)? */
+function spansMidnight(startAt: string, endAt: string): boolean {
+  return startAt.slice(0, 10) !== endAt.slice(0, 10);
 }
 
 export function MatchScoreCalendar({
@@ -46,7 +56,6 @@ export function MatchScoreCalendar({
 
   return (
     <div className="space-y-8">
-      {/* Top-3 Highlight-Karten */}
       <section>
         <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold text-slate-900">
           <Sparkles className="h-5 w-5 text-violet-500" />
@@ -84,7 +93,10 @@ export function MatchScoreCalendar({
                 {day.bestWindow && (
                   <span className="flex items-center gap-1">
                     <Clock className="h-4 w-4" />
-                    {day.bestWindow.startTime}–{day.bestWindow.endTime}
+                    {timeOf(day.bestWindow.startAt)}–{timeOf(day.bestWindow.endAt)}
+                    {spansMidnight(day.bestWindow.startAt, day.bestWindow.endAt) && (
+                      <Moon className="h-3.5 w-3.5 text-violet-500" />
+                    )}
                   </span>
                 )}
               </div>
@@ -93,7 +105,6 @@ export function MatchScoreCalendar({
         </div>
       </section>
 
-      {/* Monatsansicht */}
       <section>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-slate-900">
@@ -153,13 +164,10 @@ export function MatchScoreCalendar({
   );
 }
 
-// --- Datums-Helfer -----------------------------------------------------
-
 function buildCalendarWeeks(month: Date): (Date | null)[][] {
   const year = month.getFullYear();
   const m = month.getMonth();
   const firstDay = new Date(year, m, 1);
-  // Montag = 0 ... Sonntag = 6
   const startOffset = (firstDay.getDay() + 6) % 7;
   const daysInMonth = new Date(year, m + 1, 0).getDate();
 

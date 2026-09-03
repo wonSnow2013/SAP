@@ -2,8 +2,8 @@
 
 // =====================================================================
 // Navbar
-// Konsistente Kopfzeile auf allen eingeloggten Seiten. Zeigt den
-// Admin-Link nur für role 'admin'/'mod'. Aktive Route wird hervorgehoben.
+// Konsistente Kopfzeile auf allen eingeloggten Seiten. Zeigt Spiele-
+// Bibliothek + Admin-Link nur für role 'admin'/'mod'.
 // =====================================================================
 
 import Link from "next/link";
@@ -26,7 +26,12 @@ export function Navbar({ profile }: NavbarProps) {
   const links = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/profile", label: "Profil", icon: UserCircle2 },
-    ...(isStaff ? [{ href: "/admin/users", label: "Admin", icon: ShieldCheck }] : []),
+    ...(isStaff
+      ? [
+          { href: "/admin/games", label: "Spiele", icon: Dices },
+          { href: "/admin/users", label: "Admin", icon: ShieldCheck },
+        ]
+      : []),
   ];
 
   return (
@@ -37,7 +42,6 @@ export function Navbar({ profile }: NavbarProps) {
           Spieleabend-App
         </Link>
 
-        {/* Desktop-Nav */}
         <nav className="hidden items-center gap-1 sm:flex">
           {links.map(({ href, label, icon: Icon }) => (
             <Link
@@ -58,7 +62,7 @@ export function Navbar({ profile }: NavbarProps) {
 
         <div className="hidden items-center gap-3 sm:flex">
           <span
-            className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold text-white"
+            className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full text-xs font-semibold text-white"
             style={{ backgroundColor: profile.avatarColor }}
             title={profile.displayName}
           >
@@ -76,7 +80,6 @@ export function Navbar({ profile }: NavbarProps) {
           <SignOutButton />
         </div>
 
-        {/* Mobile Toggle */}
         <button
           className="sm:hidden"
           onClick={() => setMobileOpen((v) => !v)}

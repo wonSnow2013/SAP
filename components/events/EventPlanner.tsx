@@ -2,9 +2,9 @@
 
 // =====================================================================
 // EventPlanner
-// Fixiert einen Spielabend: Host mit Kapazität, automatisch passende
-// Spielvorschläge (basierend auf zugesagter Personenzahl + Zeitfenster),
-// Teilnehmer-RSVP in Echtzeit und ein einfacher Food-/Snack-Planer.
+// Fixiert einen Spielabend: Host mit Kapazität, Spielauswahl (Dropdown
+// aus der GESAMTEN Bibliothek + automatische Vorschläge), editierbare
+// Uhrzeit (inkl. Über-Mitternacht-Unterstützung), RSVP, Löschen.
 // =====================================================================
 
 import { useEffect, useMemo, useState, useTransition } from "react";
@@ -20,28 +20,31 @@ import {
   HelpCircle,
   Loader2,
   Trash2,
+  Moon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   createEvent,
   respondToEvent,
   suggestGamesForEvent,
+  getAllGames,
   deleteEvent,
 } from "@/lib/actions";
 import type { DayMatch, Game, GameEvent, Profile } from "@/types";
 
 interface EventPlannerProps {
-  groupId: string;
   dayMatch: DayMatch;
   members: Profile[];
   existingEvent?: GameEvent;
   currentUserId: string;
-  /** Ob der aktuelle Nutzer dieses Event löschen darf (Admin/Mod/Ersteller/Host). */
   canDelete?: boolean;
 }
 
+function timeOf(iso: string): string {
+  return iso.slice(11, 16);
+}
+
 export function EventPlanner({
-  groupId,
   dayMatch,
   members,
   existingEvent,
@@ -53,23 +56,25 @@ export function EventPlanner({
   const [hostCapacity, setHostCapacity] = useState(existingEvent?.hostCapacity ?? 6);
   const [selectedGameId, setSelectedGameId] = useState(existingEvent?.gameId ?? "");
   const [suggestedGames, setSuggestedGames] = useState<Game[]>([]);
+  const [allGames, setAllGames] = useState<Game[]>([]);
   const [isPending, startTransition] = useTransition();
   const [isDeleting, startDeleteTransition] = useTransition();
 
-  // Uhrzeit ist ein Vorschlag aus dem Match-Fenster, aber frei editierbar -
-  // z. B. wenn die Gruppe lieber früher anfangen will als "nötig" wäre.
   const [startTime, setStartTime] = useState(
-    existingEvent?.startTime ?? dayMatch.bestWindow?.startTime ?? "18:00"
+    existingEvent?.startTime ?? (dayMatch.bestWindow ? timeOf(dayMatch.bestWindow.startAt) : "18:00")
   );
   const [endTime, setEndTime] = useState(
-    existingEvent?.endTime ?? dayMatch.bestWindow?.endTime ?? "22:00"
+    existingEvent?.endTime ?? (dayMatch.bestWindow ? timeOf(dayMatch.bestWindow.endAt) : "22:00")
   );
+
+  const spansNextDay = endTime <= startTime;
 
   const availableMinutes = useMemo(() => {
     const [sh, sm] = startTime.split(":").map(Number);
     const [eh, em] = endTime.split(":").map(Number);
-    const minutes = eh * 60 + em - (sh * 60 + sm);
-    return minutes > 0 ? minutes : 180;
+    let minutes = eh * 60 + em - (sh * 60 + sm);
+    if (minutes <= 0) minutes += 24 * 60; // über Mitternacht
+    return minutes;
   }, [startTime, endTime]);
 
   const acceptedCount =
@@ -78,21 +83,42 @@ export function EventPlanner({
     members.length;
 
   useEffect(() => {
-    suggestGamesForEvent(groupId, acceptedCount, availableMinutes).then(setSuggestedGames);
-  }, [groupId, acceptedCount, availableMinutes]);
+    suggestGamesForEvent(acceptedCount, availableMinutes).then((games) =>
+      setSuggestedGames(
+        games.map((g: any) => ({
+          id: g.id,
+          title: g.title,
+          minPlayers: g.min_players,
+          maxPlayers: g.max_players,
+          estimatedDurationMinutes: g.estimated_duration_minutes,
+          imageUrl: g.image_url,
+        }))
+      )
+    );
+    getAllGames().then((games) =>
+      setAllGames(
+        games.map((g: any) => ({
+          id: g.id,
+          title: g.title,
+          minPlayers: g.min_players,
+          maxPlayers: g.max_players,
+          estimatedDurationMinutes: g.estimated_duration_minutes,
+          imageUrl: g.image_url,
+        }))
+      )
+    );
+  }, [acceptedCount, availableMinutes]);
+
+  const selectedGame = allGames.find((g) => g.id === selectedGameId);
 
   function handleCreateEvent() {
-    if (endTime <= startTime) {
-      toast.error("Die Endzeit muss nach der Startzeit liegen.");
-      return;
-    }
     startTransition(async () => {
       try {
         const event = await createEvent({
-          groupId,
           eventDate: dayMatch.date,
           startTime,
           endTime,
+          endTimeNextDay: spansNextDay,
           hostId,
           hostCapacity,
           gameId: selectedGameId || undefined,
@@ -136,7 +162,13 @@ export function EventPlanner({
           <p className="mt-1 flex items-center gap-3 text-sm text-slate-500">
             <span className="flex items-center gap-1">
               <Clock className="h-4 w-4" />
-              {dayMatch.bestWindow?.startTime}–{dayMatch.bestWindow?.endTime}
+              {startTime}–{endTime}
+              {(spansNextDay || existingEvent?.endTimeNextDay) && (
+                <span className="ml-1 inline-flex items-center gap-1 text-violet-600">
+                  <Moon className="h-3.5 w-3.5" />
+                  Folgetag
+                </span>
+              )}
             </span>
             <span className="flex items-center gap-1">
               <Users className="h-4 w-4" />
@@ -165,7 +197,6 @@ export function EventPlanner({
         </div>
       </header>
 
-      {/* Editierbare Uhrzeit */}
       <section>
         <h3 className="mb-2 text-sm font-semibold text-slate-700">Uhrzeit</h3>
         <div className="grid grid-cols-2 gap-3">
@@ -190,6 +221,12 @@ export function EventPlanner({
             />
           </div>
         </div>
+        {spansNextDay && !existingEvent && (
+          <p className="mt-1.5 flex items-center gap-1.5 text-xs text-violet-600">
+            <Moon className="h-3.5 w-3.5" />
+            Geht über Mitternacht – endet am Folgetag um {endTime} Uhr.
+          </p>
+        )}
         {!existingEvent && dayMatch.bestWindow && (
           <p className="mt-1.5 text-xs text-slate-400">
             Vorschlag basierend auf dem besten Überlapp-Fenster – du kannst die Zeit
@@ -198,7 +235,6 @@ export function EventPlanner({
         )}
       </section>
 
-      {/* Host-Auswahl */}
       <section>
         <h3 className="mb-2 text-sm font-semibold text-slate-700">Wer hostet?</h3>
         <div className="flex flex-wrap gap-2">
@@ -213,10 +249,7 @@ export function EventPlanner({
                   : "border-slate-200 text-slate-600 hover:border-slate-300"
               )}
             >
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: m.avatarColor }}
-              />
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: m.avatarColor }} />
               {m.displayName}
             </button>
           ))}
@@ -234,53 +267,67 @@ export function EventPlanner({
         </div>
       </section>
 
-      {/* Spielauswahl mit automatischem Vorschlag */}
       <section>
         <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
           <Dices className="h-4 w-4" />
-          Passende Spiele ({acceptedCount} Spieler, ~{Math.round(availableMinutes / 60)}h Zeit)
+          Spiel auswählen
         </h3>
-        {suggestedGames.length === 0 ? (
-          <p className="text-sm text-slate-400">
-            Keine passenden Spiele in der Bibliothek gefunden – trag welche in eurer
-            Spiele-Bibliothek ein!
+
+        {/* Dropdown mit der GESAMTEN Bibliothek */}
+        <select
+          value={selectedGameId}
+          onChange={(e) => setSelectedGameId(e.target.value)}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        >
+          <option value="">– Kein Spiel ausgewählt –</option>
+          {allGames.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.title} ({g.minPlayers}-{g.maxPlayers} Spieler, {g.estimatedDurationMinutes} Min.)
+            </option>
+          ))}
+        </select>
+
+        {selectedGame && (
+          <p className="mt-1.5 text-xs text-slate-500">
+            {selectedGame.minPlayers}-{selectedGame.maxPlayers} Spieler · geschätzte Dauer{" "}
+            {selectedGame.estimatedDurationMinutes} Min.
           </p>
-        ) : (
-          <div className="grid gap-2 sm:grid-cols-2">
-            {suggestedGames.map((game) => (
-              <button
-                key={game.id}
-                onClick={() => setSelectedGameId(game.id)}
-                className={cn(
-                  "flex items-center justify-between rounded-xl border px-3 py-2.5 text-left transition-colors",
-                  selectedGameId === game.id
-                    ? "border-violet-400 bg-violet-50"
-                    : "border-slate-200 hover:border-slate-300"
-                )}
-              >
-                <div>
-                  <p className="text-sm font-medium text-slate-900">{game.title}</p>
-                  <p className="text-xs text-slate-500">
-                    {game.minPlayers}-{game.maxPlayers} Spieler ·{" "}
-                    {game.durationMinutes} Min.
-                  </p>
-                </div>
-                {selectedGameId === game.id && (
-                  <Check className="h-4 w-4 text-violet-600" />
-                )}
-              </button>
-            ))}
+        )}
+
+        {suggestedGames.length > 0 && (
+          <div className="mt-4">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+              Passt gut zu {acceptedCount} Spielern &amp; ~{Math.round(availableMinutes / 60)}h Zeit
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {suggestedGames.map((game) => (
+                <button
+                  key={game.id}
+                  onClick={() => setSelectedGameId(game.id)}
+                  className={cn(
+                    "flex items-center justify-between rounded-xl border px-3 py-2.5 text-left transition-colors",
+                    selectedGameId === game.id
+                      ? "border-violet-400 bg-violet-50"
+                      : "border-slate-200 hover:border-slate-300"
+                  )}
+                >
+                  <div>
+                    <p className="text-sm font-medium text-slate-900">{game.title}</p>
+                    <p className="text-xs text-slate-500">
+                      {game.minPlayers}-{game.maxPlayers} Spieler ·{" "}
+                      {game.estimatedDurationMinutes} Min.
+                    </p>
+                  </div>
+                  {selectedGameId === game.id && <Check className="h-4 w-4 text-violet-600" />}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </section>
 
-      {/* RSVP-Liste */}
       {existingEvent && (
-        <RsvpList
-          event={existingEvent}
-          members={members}
-          currentUserId={currentUserId}
-        />
+        <RsvpList event={existingEvent} members={members} currentUserId={currentUserId} />
       )}
 
       {!existingEvent && (
@@ -334,10 +381,7 @@ function RsvpList({
               className="flex items-center justify-between rounded-lg px-2 py-1.5 hover:bg-slate-50"
             >
               <span className="flex items-center gap-2 text-sm text-slate-700">
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: m.avatarColor }}
-                />
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: m.avatarColor }} />
                 {m.displayName}
               </span>
               <StatusBadge status={status} />

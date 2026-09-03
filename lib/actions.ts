@@ -2,25 +2,20 @@
 
 // =====================================================================
 // SERVER ACTIONS · Next.js App Router
-// Kapselt sämtliche Schreiboperationen serverseitig (kein API-Layer
-// nötig). Nutzt den Supabase Server-Client (RLS greift automatisch
-// anhand der eingeloggten Session).
+// Global (kein groupId mehr) - RLS gated überall auf profiles.is_approved
+// (siehe is_approved_user() in der DB) bzw. is_staff_user() für Admin/Mod.
 // =====================================================================
 
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import {
-  calculateBestDays,
-  expandRecurringToSlots,
-} from "@/lib/matching-algorithm";
-import type { DayMatch, Preference, TimeSlot } from "@/types";
+import { calculateBestDays, expandRecurringToSlots } from "@/lib/matching-algorithm";
+import type { DayMatch, Preference, TimeSlot, MyAvailabilityEntry } from "@/types";
 
 // ---------------------------------------------------------------------
-// Verfügbarkeiten eintragen
+// Verfügbarkeiten: eintragen
 // ---------------------------------------------------------------------
 
 export async function upsertRecurringAvailability(input: {
-  groupId: string;
   weekday: number;
   startTime: string;
   endTime: string;
@@ -32,7 +27,6 @@ export async function upsertRecurringAvailability(input: {
 
   const { error } = await supabase.from("recurring_availability").insert({
     user_id: auth.user.id,
-    group_id: input.groupId,
     weekday: input.weekday,
     start_time: input.startTime,
     end_time: input.endTime,
@@ -40,14 +34,20 @@ export async function upsertRecurringAvailability(input: {
   });
   if (error) throw new Error(error.message);
 
-  revalidatePath("/calendar");
+  revalidatePath("/dashboard");
+  revalidatePath("/profile");
 }
 
+/**
+ * Legt eine konkrete Datums-Verfügbarkeit an. Unterstützt Fenster über
+ * Mitternacht: Wenn endDate nicht explizit angegeben ist, wird
+ * automatisch der Folgetag angenommen, sobald endTime <= startTime ist.
+ */
 export async function upsertDateAvailability(input: {
-  groupId: string;
   date: string;
   startTime?: string;
   endTime?: string;
+  endDate?: string;
   status: "available" | "blocked" | "maybe";
   preference?: Preference;
   note?: string;
@@ -56,77 +56,220 @@ export async function upsertDateAvailability(input: {
   const { data: auth } = await supabase.auth.getUser();
   if (!auth.user) throw new Error("Nicht angemeldet.");
 
+  const startAt =
+    input.status === "available" && input.startTime
+      ? `${input.date}T${input.startTime}:00`
+      : `${input.date}T00:00:00`;
+
+  let endAt: string | null = null;
+  if (input.status === "available" && input.startTime && input.endTime) {
+    const spansNextDay = !input.endDate && input.endTime <= input.startTime;
+    const endDate = input.endDate ?? (spansNextDay ? addDays(input.date, 1) : input.date);
+    endAt = `${endDate}T${input.endTime}:00`;
+  }
+
   const { error } = await supabase.from("date_availability").upsert(
     {
       user_id: auth.user.id,
-      group_id: input.groupId,
-      date: input.date,
-      start_time: input.startTime ?? null,
-      end_time: input.endTime ?? null,
+      start_at: startAt,
+      end_at: endAt,
       status: input.status,
-      preference: input.preference ?? null,
+      preference: input.status === "available" ? input.preference ?? null : null,
       note: input.note ?? null,
     },
-    { onConflict: "user_id,group_id,date,start_time" }
+    { onConflict: "user_id,start_at" }
   );
   if (error) throw new Error(error.message);
 
-  revalidatePath("/calendar");
+  revalidatePath("/dashboard");
+  revalidatePath("/profile");
+}
+
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 // ---------------------------------------------------------------------
-// Matching: beste Tage für einen Zeitraum berechnen
+// Verfügbarkeiten: "Meine Verfügbarkeiten" - Übersicht, Bearbeiten, Löschen
 // ---------------------------------------------------------------------
 
-export async function getBestDaysForGroup(
-  groupId: string,
+export async function getMyAvailabilities(): Promise<MyAvailabilityEntry[]> {
+  const supabase = await createServerSupabaseClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error("Nicht angemeldet.");
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [{ data: recurring }, { data: dateSpecific }] = await Promise.all([
+    supabase
+      .from("recurring_availability")
+      .select("id, weekday, start_time, end_time, preference")
+      .eq("user_id", auth.user.id)
+      .order("weekday", { ascending: true }),
+    supabase
+      .from("date_availability")
+      .select("id, start_at, end_at, status, preference, note")
+      .eq("user_id", auth.user.id)
+      .gte("start_at", `${today}T00:00:00`)
+      .order("start_at", { ascending: true }),
+  ]);
+
+  const recurringEntries: MyAvailabilityEntry[] = (recurring ?? []).map((r) => ({
+    id: r.id,
+    kind: "recurring",
+    weekday: r.weekday,
+    startTime: r.start_time.slice(0, 5),
+    endTime: r.end_time.slice(0, 5),
+    preference: r.preference,
+  }));
+
+  const dateEntries: MyAvailabilityEntry[] = (dateSpecific ?? []).map((d) => ({
+    id: d.id,
+    kind: "date-specific",
+    startAt: d.start_at,
+    endAt: d.end_at,
+    status: d.status,
+    note: d.note,
+    startTime: new Date(d.start_at).toISOString().slice(11, 16),
+    endTime: d.end_at ? new Date(d.end_at).toISOString().slice(11, 16) : "",
+    preference: d.preference,
+  }));
+
+  return [...dateEntries, ...recurringEntries];
+}
+
+export async function deleteRecurringAvailability(id: string) {
+  const supabase = await createServerSupabaseClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error("Nicht angemeldet.");
+
+  const { error } = await supabase
+    .from("recurring_availability")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", auth.user.id);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/profile");
+  revalidatePath("/dashboard");
+}
+
+export async function deleteDateAvailability(id: string) {
+  const supabase = await createServerSupabaseClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error("Nicht angemeldet.");
+
+  const { error } = await supabase
+    .from("date_availability")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", auth.user.id);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/profile");
+  revalidatePath("/dashboard");
+}
+
+export async function updateDateAvailability(
+  id: string,
+  input: {
+    date: string;
+    startTime?: string;
+    endTime?: string;
+    endDate?: string;
+    status: "available" | "blocked" | "maybe";
+    preference?: Preference;
+    note?: string;
+  }
+) {
+  const supabase = await createServerSupabaseClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error("Nicht angemeldet.");
+
+  const startAt =
+    input.status === "available" && input.startTime
+      ? `${input.date}T${input.startTime}:00`
+      : `${input.date}T00:00:00`;
+
+  let endAt: string | null = null;
+  if (input.status === "available" && input.startTime && input.endTime) {
+    const spansNextDay = !input.endDate && input.endTime <= input.startTime;
+    const endDate = input.endDate ?? (spansNextDay ? addDays(input.date, 1) : input.date);
+    endAt = `${endDate}T${input.endTime}:00`;
+  }
+
+  const { error } = await supabase
+    .from("date_availability")
+    .update({
+      start_at: startAt,
+      end_at: endAt,
+      status: input.status,
+      preference: input.status === "available" ? input.preference ?? null : null,
+      note: input.note ?? null,
+    })
+    .eq("id", id)
+    .eq("user_id", auth.user.id);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/profile");
+  revalidatePath("/dashboard");
+}
+
+// ---------------------------------------------------------------------
+// Matching: beste Tage für den Zeitraum berechnen (global, alle Nutzer)
+// ---------------------------------------------------------------------
+
+export async function getBestDays(
   dateRange: { from: string; to: string },
   topN = 3
 ): Promise<DayMatch[]> {
   const supabase = await createServerSupabaseClient();
 
-  const [{ data: members }, { data: recurring }, { data: dateSpecific }] =
-    await Promise.all([
-      supabase.from("group_members").select("user_id").eq("group_id", groupId),
-      supabase
-        .from("recurring_availability")
-        .select("user_id, weekday, start_time, end_time, preference")
-        .eq("group_id", groupId),
-      supabase
-        .from("date_availability")
-        .select("user_id, date, start_time, end_time, status, preference")
-        .eq("group_id", groupId)
-        .gte("date", dateRange.from)
-        .lte("date", dateRange.to),
-    ]);
+  const [{ data: users }, { data: recurring }, { data: dateSpecific }] = await Promise.all([
+    supabase.from("profiles").select("id").eq("is_approved", true),
+    supabase
+      .from("recurring_availability")
+      .select("user_id, weekday, start_time, end_time, preference"),
+    supabase
+      .from("date_availability")
+      .select("user_id, start_at, end_at, status, preference")
+      .gte("start_at", `${addDays(dateRange.from, -1)}T00:00:00`)
+      .lte("start_at", `${dateRange.to}T23:59:59`),
+  ]);
 
-  const groupMemberIds = (members ?? []).map((m) => m.user_id);
+  const totalUserCount = (users ?? []).length;
 
   const recurringSlots = expandRecurringToSlots(
     (recurring ?? []).map((r) => ({
       userId: r.user_id,
       weekday: r.weekday,
-      startTime: r.start_time,
-      endTime: r.end_time,
+      startTime: r.start_time.slice(0, 5),
+      endTime: r.end_time.slice(0, 5),
       preference: r.preference as Preference,
     })),
     dateRange
   );
 
-  const blockedUserDates = new Set<string>();
+  const blockedRanges: { userId: string; startAt: string; endAt: string }[] = [];
   const dateSlots: TimeSlot[] = [];
 
   for (const d of dateSpecific ?? []) {
     if (d.status === "blocked") {
-      blockedUserDates.add(`${d.user_id}__${d.date}`);
+      const dayEnd = addDays(d.start_at.slice(0, 10), 1) + "T00:00:00";
+      blockedRanges.push({
+        userId: d.user_id,
+        startAt: d.start_at,
+        endAt: d.end_at ?? dayEnd,
+      });
       continue;
     }
-    if (d.start_time && d.end_time) {
+    if (d.end_at) {
       dateSlots.push({
         userId: d.user_id,
-        date: d.date,
-        startTime: d.start_time,
-        endTime: d.end_time,
+        startAt: d.start_at,
+        endAt: d.end_at,
         preference: (d.preference ?? 2) as Preference,
         source: "date-specific",
       });
@@ -135,8 +278,8 @@ export async function getBestDaysForGroup(
 
   return calculateBestDays({
     slots: [...recurringSlots, ...dateSlots],
-    blockedUserDates,
-    groupMemberIds,
+    blockedRanges,
+    totalUserCount,
     dateRange,
     topN,
   });
@@ -147,10 +290,10 @@ export async function getBestDaysForGroup(
 // ---------------------------------------------------------------------
 
 export async function createEvent(input: {
-  groupId: string;
   eventDate: string;
   startTime: string;
   endTime?: string;
+  endTimeNextDay?: boolean;
   hostId?: string;
   hostCapacity?: number;
   gameId?: string;
@@ -163,10 +306,10 @@ export async function createEvent(input: {
   const { data: event, error } = await supabase
     .from("events")
     .insert({
-      group_id: input.groupId,
       event_date: input.eventDate,
       start_time: input.startTime,
       end_time: input.endTime,
+      end_time_next_day: input.endTimeNextDay ?? false,
       host_id: input.hostId,
       host_capacity: input.hostCapacity,
       game_id: input.gameId,
@@ -178,31 +321,24 @@ export async function createEvent(input: {
     .single();
   if (error) throw new Error(error.message);
 
-  // Alle Gruppenmitglieder automatisch als "invited" eintragen
-  const { data: members } = await supabase
-    .from("group_members")
-    .select("user_id")
-    .eq("group_id", input.groupId);
+  const { data: users } = await supabase.from("profiles").select("id").eq("is_approved", true);
 
-  if (members?.length) {
+  if (users?.length) {
     await supabase.from("event_participants").insert(
-      members.map((m) => ({
+      users.map((u) => ({
         event_id: event.id,
-        user_id: m.user_id,
-        status: m.user_id === auth.user!.id ? "accepted" : "invited",
+        user_id: u.id,
+        status: u.id === auth.user!.id ? "accepted" : "invited",
       }))
     );
   }
 
-  await maybeNotifyDiscord(input.groupId, "event_confirmed", event);
+  await maybeNotifyDiscord("event_confirmed", event);
   revalidatePath("/dashboard");
   return event;
 }
 
-export async function respondToEvent(
-  eventId: string,
-  status: "accepted" | "declined" | "maybe"
-) {
+export async function respondToEvent(eventId: string, status: "accepted" | "declined" | "maybe") {
   const supabase = await createServerSupabaseClient();
   const { data: auth } = await supabase.auth.getUser();
   if (!auth.user) throw new Error("Nicht angemeldet.");
@@ -217,52 +353,172 @@ export async function respondToEvent(
   revalidatePath(`/events/${eventId}`);
 }
 
+export async function deleteEvent(eventId: string) {
+  const supabase = await createServerSupabaseClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error("Nicht angemeldet.");
+
+  const { error } = await supabase.from("events").delete().eq("id", eventId);
+  if (error) {
+    throw new Error(
+      "Löschen nicht möglich (fehlende Berechtigung oder Datenbankfehler): " + error.message
+    );
+  }
+
+  revalidatePath("/dashboard");
+}
+
+/** Alle anstehenden (nicht abgesagten) Events, global für die ganze App. */
+export async function getUpcomingEvents() {
+  const supabase = await createServerSupabaseClient();
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { data, error } = await supabase
+    .from("events")
+    .select(
+      `id, event_date, start_time, end_time, end_time_next_day, status, match_score,
+       host_id, host_capacity,
+       games(title),
+       event_participants(user_id, status)`
+    )
+    .neq("status", "cancelled")
+    .gte("event_date", today)
+    .order("event_date", { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 // ---------------------------------------------------------------------
-// Spiel-Vorschlag basierend auf zugesagter Teilnehmerzahl & Zeitfenster
+// Spiele-Bibliothek (global, lesen für alle, schreiben nur Admin/Mod)
 // ---------------------------------------------------------------------
 
-export async function suggestGamesForEvent(
-  groupId: string,
-  confirmedPlayerCount: number,
-  availableMinutes: number
-) {
+export async function getAllGames() {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase
+    .from("games")
+    .select("*")
+    .order("title", { ascending: true });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** Spielvorschlag basierend auf zugesagter Teilnehmerzahl & Zeitfenster. */
+export async function suggestGamesForEvent(confirmedPlayerCount: number, availableMinutes: number) {
   const supabase = await createServerSupabaseClient();
   const { data: games, error } = await supabase
     .from("games")
     .select("*")
-    .eq("group_id", groupId)
     .lte("min_players", confirmedPlayerCount)
     .gte("max_players", confirmedPlayerCount)
-    .lte("duration_minutes", availableMinutes);
+    .lte("estimated_duration_minutes", availableMinutes);
   if (error) throw new Error(error.message);
 
-  // Sortiere danach, wie gut die Spieldauer die verfügbare Zeit ausnutzt
   return (games ?? []).sort(
     (a, b) =>
-      Math.abs(availableMinutes - a.duration_minutes) -
-      Math.abs(availableMinutes - b.duration_minutes)
+      Math.abs(availableMinutes - a.estimated_duration_minutes) -
+      Math.abs(availableMinutes - b.estimated_duration_minutes)
   );
 }
 
+async function requireStaffForGames(
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>
+) {
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error("Nicht angemeldet.");
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", auth.user.id)
+    .single();
+  if (profile?.role !== "admin" && profile?.role !== "mod") {
+    throw new Error("Nur Admins/Mods dürfen die Spielebibliothek verwalten.");
+  }
+  return auth.user;
+}
+
+export async function createGame(input: {
+  title: string;
+  minPlayers: number;
+  maxPlayers: number;
+  estimatedDurationMinutes: number;
+  imageUrl?: string;
+}) {
+  const supabase = await createServerSupabaseClient();
+  const user = await requireStaffForGames(supabase);
+
+  const { error } = await supabase.from("games").insert({
+    title: input.title,
+    min_players: input.minPlayers,
+    max_players: input.maxPlayers,
+    estimated_duration_minutes: input.estimatedDurationMinutes,
+    image_url: input.imageUrl ?? null,
+    created_by: user.id,
+  });
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/admin/games");
+  revalidatePath("/events/new");
+}
+
+export async function updateGame(
+  id: string,
+  input: {
+    title: string;
+    minPlayers: number;
+    maxPlayers: number;
+    estimatedDurationMinutes: number;
+    imageUrl?: string;
+  }
+) {
+  const supabase = await createServerSupabaseClient();
+  await requireStaffForGames(supabase);
+
+  const { error } = await supabase
+    .from("games")
+    .update({
+      title: input.title,
+      min_players: input.minPlayers,
+      max_players: input.maxPlayers,
+      estimated_duration_minutes: input.estimatedDurationMinutes,
+      image_url: input.imageUrl ?? null,
+    })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/admin/games");
+  revalidatePath("/events/new");
+}
+
+export async function deleteGame(id: string) {
+  const supabase = await createServerSupabaseClient();
+  await requireStaffForGames(supabase);
+
+  const { error } = await supabase.from("games").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/admin/games");
+  revalidatePath("/events/new");
+}
+
 // ---------------------------------------------------------------------
-// Discord-Webhook-Benachrichtigung
+// Discord-Webhook-Benachrichtigung (app-weit statt pro Gruppe)
 // ---------------------------------------------------------------------
 
 async function maybeNotifyDiscord(
-  groupId: string,
   event: "event_confirmed" | "perfect_match",
   payload: Record<string, unknown>
 ) {
   const supabase = await createServerSupabaseClient();
-  const { data: integration } = await supabase
-    .from("group_integrations")
+  const { data: settings } = await supabase
+    .from("app_settings")
     .select("*")
-    .eq("group_id", groupId)
+    .eq("id", 1)
     .maybeSingle();
 
-  if (!integration?.discord_webhook_url) return;
-  if (event === "event_confirmed" && !integration.notify_on_event_confirmed) return;
-  if (event === "perfect_match" && !integration.notify_on_perfect_match) return;
+  if (!settings?.discord_webhook_url) return;
+  if (event === "event_confirmed" && !settings.notify_on_event_confirmed) return;
+  if (event === "perfect_match" && !settings.notify_on_perfect_match) return;
 
   const content =
     event === "event_confirmed"
@@ -270,7 +526,7 @@ async function maybeNotifyDiscord(
       : `✨ Perfekter Tag gefunden: **${payload.date}** – alle können, ${payload.duration} Min. Überschneidung!`;
 
   try {
-    await fetch(integration.discord_webhook_url, {
+    await fetch(settings.discord_webhook_url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content }),
@@ -283,10 +539,6 @@ async function maybeNotifyDiscord(
 // =====================================================================
 // ADMIN: Benutzerverwaltung
 // =====================================================================
-// Alle Funktionen hier verlassen sich zusätzlich auf die RLS-Policies
-// "profiles: admin update all" (nur is_current_user_admin() darf andere
-// Profile ändern) - selbst wenn jemand versucht, diese Funktionen zu
-// missbrauchen, blockt die Datenbank nicht-Admins serverseitig ab.
 
 async function requireAdmin(supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>) {
   const { data: auth } = await supabase.auth.getUser();
@@ -297,7 +549,6 @@ async function requireAdmin(supabase: Awaited<ReturnType<typeof createServerSupa
     .select("role")
     .eq("id", auth.user.id)
     .single();
-
   if (profile?.role !== "admin") throw new Error("Nur Admins dürfen das.");
   return auth.user;
 }
@@ -312,7 +563,6 @@ async function requireStaff(supabase: Awaited<ReturnType<typeof createServerSupa
     .select("role")
     .eq("id", auth.user.id)
     .single();
-
   if (profile?.role !== "admin" && profile?.role !== "mod") {
     throw new Error("Kein Zugriff.");
   }
@@ -336,10 +586,7 @@ export async function adminLockUser(userId: string) {
   const supabase = await createServerSupabaseClient();
   await requireAdmin(supabase);
 
-  const { error } = await supabase
-    .from("profiles")
-    .update({ is_approved: false })
-    .eq("id", userId);
+  const { error } = await supabase.from("profiles").update({ is_approved: false }).eq("id", userId);
   if (error) throw new Error(error.message);
 
   revalidatePath("/admin/users");
@@ -355,11 +602,6 @@ export async function adminSetRole(userId: string, role: "user" | "mod" | "admin
   revalidatePath("/admin/users");
 }
 
-/**
- * Löscht einen Nutzer vollständig (Auth-Account + Profil via Cascade).
- * Braucht den Service-Role-Client, weil das normale anon/RLS-Setup das
- * Löschen von auth.users nicht erlaubt.
- */
 export async function adminDeleteUser(userId: string) {
   const supabase = await createServerSupabaseClient();
   const admin = await requireAdmin(supabase);
@@ -387,48 +629,5 @@ export async function getAllUsersForAdmin() {
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
 
-  return data;
-}
-
-// =====================================================================
-// EVENTS: Löschen (Admin/Mod oder Ersteller/Host, via RLS abgesichert)
-// =====================================================================
-
-export async function deleteEvent(eventId: string) {
-  const supabase = await createServerSupabaseClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) throw new Error("Nicht angemeldet.");
-
-  const { error } = await supabase.from("events").delete().eq("id", eventId);
-  // RLS blockt automatisch, falls der Nutzer weder Staff noch
-  // Ersteller/Host ist - error.message ist in dem Fall generisch von
-  // Postgres, daher hier eine sprechendere Meldung.
-  if (error) {
-    throw new Error(
-      "Löschen nicht möglich (fehlende Berechtigung oder Datenbankfehler): " + error.message
-    );
-  }
-
-  revalidatePath("/dashboard");
-}
-
-/** Alle anstehenden (nicht abgesagten) Events einer Gruppe, für das Dashboard. */
-export async function getUpcomingEvents(groupId: string) {
-  const supabase = await createServerSupabaseClient();
-  const today = new Date().toISOString().slice(0, 10);
-
-  const { data, error } = await supabase
-    .from("events")
-    .select(
-      `id, event_date, start_time, end_time, status, match_score, host_id, host_capacity,
-       games(title),
-       event_participants(user_id, status)`
-    )
-    .eq("group_id", groupId)
-    .neq("status", "cancelled")
-    .gte("event_date", today)
-    .order("event_date", { ascending: true });
-
-  if (error) throw new Error(error.message);
   return data;
 }

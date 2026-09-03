@@ -1,21 +1,19 @@
 import Link from "next/link";
-import { CalendarDays, Users, Clock } from "lucide-react";
+import { CalendarDays, Users, Clock, Moon } from "lucide-react";
 
 interface UpcomingEventRow {
   id: string;
   event_date: string;
   start_time: string;
   end_time: string | null;
+  end_time_next_day: boolean;
   status: string;
   match_score: number | null;
   games: { title: string } | { title: string }[] | null;
   event_participants: { user_id: string; status: string }[];
 }
 
-/**
- * Zeigt alle bereits fixierten, anstehenden Spielabende der Gruppe.
- * Behebt den Bug, dass neu erstellte Events bisher nirgends sichtbar waren.
- */
+/** Zeigt alle bereits fixierten, anstehenden Spielabende (global). */
 export function UpcomingEventsList({ events }: { events: UpcomingEventRow[] }) {
   if (events.length === 0) {
     return (
@@ -64,6 +62,12 @@ export function UpcomingEventsList({ events }: { events: UpcomingEventRow[] }) {
                     <Clock className="h-3.5 w-3.5" />
                     {event.start_time}
                     {event.end_time && `–${event.end_time}`}
+                    {event.end_time_next_day && (
+                      <span className="ml-1 inline-flex items-center gap-0.5 text-violet-600">
+                        <Moon className="h-3 w-3" />
+                        +1 Tag
+                      </span>
+                    )}
                   </span>
                   <span className="flex items-center gap-1">
                     <Users className="h-3.5 w-3.5" />

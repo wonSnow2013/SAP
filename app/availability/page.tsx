@@ -1,6 +1,6 @@
 // =====================================================================
 // /availability · Server Component
-// Bindet das Verfügbarkeits-Formular an die Gruppe des Nutzers.
+// Globale Verfügbarkeit - kein Gruppen-Lookup mehr nötig.
 // =====================================================================
 
 import { redirect } from "next/navigation";
@@ -13,20 +13,11 @@ export default async function AvailabilityPage() {
   const { data: auth } = await supabase.auth.getUser();
   if (!auth.user) redirect("/login");
 
-  const { data: membership } = await supabase
-    .from("group_members")
-    .select("group_id")
-    .eq("user_id", auth.user.id)
-    .limit(1)
-    .single();
-
-  if (!membership) redirect("/onboarding");
-
   return (
     <main className="mx-auto max-w-lg px-4 py-8">
       <BackToDashboard />
       <h1 className="mb-6 text-2xl font-bold text-slate-900">Verfügbarkeit eintragen</h1>
-      <AvailabilityForm groupId={membership.group_id} />
+      <AvailabilityForm />
     </main>
   );
 }

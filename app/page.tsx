@@ -1,9 +1,3 @@
-// =====================================================================
-// / · Server Component
-// Leitet eingeloggte Nutzer direkt zum Dashboard weiter, alle anderen
-// zur Login-Seite.
-// =====================================================================
-
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 

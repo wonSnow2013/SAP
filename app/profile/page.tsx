@@ -2,16 +2,20 @@
 
 // =====================================================================
 // /profile · Client Component
-// E-Mail (schreibgeschützt), Anzeigename, Profilfarbe, Avatar-Upload
-// (oder Initialen-Fallback). Speichern zeigt Toast-Feedback.
+// Tab 1: Einstellungen (E-Mail, Name, Farbe, Avatar-Upload).
+// Tab 2: Meine Verfügbarkeiten (Übersicht, Bearbeiten, Löschen).
 // =====================================================================
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { Upload, Trash2 } from "lucide-react";
+import { Upload, Trash2, Settings, CalendarClock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { BackToDashboard } from "@/components/layout/BackToDashboard";
+import { MyAvailabilityList } from "@/components/availability/MyAvailabilityList";
+import { AvailabilityForm } from "@/components/availability/AvailabilityForm";
+import { getMyAvailabilities } from "@/lib/actions";
+import type { MyAvailabilityEntry } from "@/types";
 
 const AVATAR_COLORS = ["#6366f1", "#ec4899", "#f59e0b", "#10b981", "#3b82f6", "#ef4444", "#8b5cf6", "#14b8a6"];
 
@@ -23,10 +27,13 @@ interface ProfileFormState {
 }
 
 export default function ProfilePage() {
+  const [tab, setTab] = useState<"settings" | "availability">("settings");
   const [state, setState] = useState<ProfileFormState | null>(null);
   const [isPending, startTransition] = useTransition();
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [availabilities, setAvailabilities] = useState<MyAvailabilityEntry[] | null>(null);
 
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
@@ -46,6 +53,12 @@ export default function ProfilePage() {
       });
     })();
   }, []);
+
+  useEffect(() => {
+    if (tab === "availability" && availabilities === null) {
+      getMyAvailabilities().then(setAvailabilities);
+    }
+  }, [tab, availabilities]);
 
   function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -108,7 +121,6 @@ export default function ProfilePage() {
     }
 
     const { data: publicUrl } = supabase.storage.from("avatars").getPublicUrl(path);
-    // Cache-Busting, damit das neue Bild sofort statt der alten Version angezeigt wird
     const bustedUrl = `${publicUrl.publicUrl}?t=${Date.now()}`;
 
     const { error: updateError } = await supabase
@@ -146,127 +158,160 @@ export default function ProfilePage() {
     toast.success("Avatar entfernt, Initialen werden angezeigt.");
   }
 
-  if (!state) {
-    return (
-      <main className="mx-auto max-w-lg px-4 py-8">
-        <p className="text-sm text-slate-400">Lädt…</p>
-      </main>
-    );
-  }
-
-  const initials = state.displayName
-    .split(" ")
-    .map((p) => p[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-
   return (
     <main className="mx-auto max-w-lg px-4 py-8">
       <BackToDashboard />
       <h1 className="mb-6 text-2xl font-bold text-slate-900">Profil & Einstellungen</h1>
 
-      <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6">
-        {/* Avatar */}
-        <div className="flex items-center gap-4">
-          <div
-            className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full text-lg font-semibold text-white"
-            style={{ backgroundColor: state.avatarColor }}
-          >
-            {state.avatarUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={state.avatarUrl} alt="Avatar" className="h-16 w-16 object-cover" />
-            ) : (
-              initials || "?"
-            )}
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleAvatarUpload}
-            />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-              className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-violet-400 disabled:opacity-50"
-            >
-              <Upload className="h-3.5 w-3.5" />
-              {isUploading ? "Lädt hoch…" : "Bild hochladen"}
-            </button>
-            {state.avatarUrl && (
-              <button
-                type="button"
-                onClick={handleRemoveAvatar}
-                className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-rose-600"
+      <div className="mb-6 flex gap-1 rounded-xl bg-slate-100 p-1">
+        <button
+          onClick={() => setTab("settings")}
+          className={cn(
+            "flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium",
+            tab === "settings" ? "bg-white text-violet-700 shadow-sm" : "text-slate-500"
+          )}
+        >
+          <Settings className="h-4 w-4" />
+          Einstellungen
+        </button>
+        <button
+          onClick={() => setTab("availability")}
+          className={cn(
+            "flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium",
+            tab === "availability" ? "bg-white text-violet-700 shadow-sm" : "text-slate-500"
+          )}
+        >
+          <CalendarClock className="h-4 w-4" />
+          Meine Verfügbarkeiten
+        </button>
+      </div>
+
+      {tab === "settings" ? (
+        !state ? (
+          <p className="text-sm text-slate-400">Lädt…</p>
+        ) : (
+          <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6">
+            <div className="flex items-center gap-4">
+              <div
+                className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full text-lg font-semibold text-white"
+                style={{ backgroundColor: state.avatarColor }}
               >
-                <Trash2 className="h-3 w-3" />
-                Entfernen (Initialen nutzen)
-              </button>
-            )}
-          </div>
-        </div>
-
-        <form onSubmit={handleSave} className="space-y-4">
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              E-Mail-Adresse
-            </label>
-            <input
-              type="email"
-              value={state.email}
-              disabled
-              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500"
-            />
-            <p className="mt-1 text-xs text-slate-400">
-              Änderung der E-Mail ist aktuell nicht selbst möglich – wende dich an einen Admin.
-            </p>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Anzeigename
-            </label>
-            <input
-              value={state.displayName}
-              onChange={(e) => setState({ ...state, displayName: e.target.value })}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-            />
-          </div>
-
-          <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">
-              Profilfarbe (hebt deine Zeiten im Kalender hervor)
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {AVATAR_COLORS.map((color) => (
+                {state.avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={state.avatarUrl} alt="Avatar" className="h-16 w-16 object-cover" />
+                ) : (
+                  initialsOf(state.displayName)
+                )}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleAvatarUpload}
+                />
                 <button
                   type="button"
-                  key={color}
-                  onClick={() => setState({ ...state, avatarColor: color })}
-                  style={{ backgroundColor: color }}
-                  className={cn(
-                    "h-8 w-8 rounded-full transition-transform",
-                    state.avatarColor === color &&
-                      "scale-110 ring-2 ring-slate-400 ring-offset-2"
-                  )}
-                />
-              ))}
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-violet-400 disabled:opacity-50"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  {isUploading ? "Lädt hoch…" : "Bild hochladen"}
+                </button>
+                {state.avatarUrl && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveAvatar}
+                    className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-rose-600"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                    Entfernen (Initialen nutzen)
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
 
-          <button
-            type="submit"
-            disabled={isPending}
-            className="w-full rounded-lg bg-violet-600 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
-          >
-            {isPending ? "Speichert…" : "Änderungen speichern"}
-          </button>
-        </form>
-      </div>
+            <form onSubmit={handleSave} className="space-y-4">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  E-Mail-Adresse
+                </label>
+                <input
+                  type="email"
+                  value={state.email}
+                  disabled
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500"
+                />
+                <p className="mt-1 text-xs text-slate-400">
+                  Änderung der E-Mail ist aktuell nicht selbst möglich – wende dich an einen Admin.
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Anzeigename
+                </label>
+                <input
+                  value={state.displayName}
+                  onChange={(e) => setState({ ...state, displayName: e.target.value })}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700">
+                  Profilfarbe (hebt deine Zeiten im Kalender hervor)
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {AVATAR_COLORS.map((color) => (
+                    <button
+                      type="button"
+                      key={color}
+                      onClick={() => setState({ ...state, avatarColor: color })}
+                      style={{ backgroundColor: color }}
+                      className={cn(
+                        "h-8 w-8 rounded-full transition-transform",
+                        state.avatarColor === color &&
+                          "scale-110 ring-2 ring-slate-400 ring-offset-2"
+                      )}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isPending}
+                className="w-full rounded-lg bg-violet-600 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
+              >
+                {isPending ? "Speichert…" : "Änderungen speichern"}
+              </button>
+            </form>
+          </div>
+        )
+      ) : (
+        <div className="space-y-6">
+          <AvailabilityForm
+            onSaved={() => getMyAvailabilities().then(setAvailabilities)}
+          />
+          {availabilities === null ? (
+            <p className="text-sm text-slate-400">Lädt…</p>
+          ) : (
+            <MyAvailabilityList initialEntries={availabilities} />
+          )}
+        </div>
+      )}
     </main>
   );
+}
+
+function initialsOf(name: string): string {
+  return name
+    .split(" ")
+    .map((p) => p[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "?";
 }
