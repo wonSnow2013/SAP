@@ -38,7 +38,8 @@ export async function createServerSupabaseClient() {
         },
       },
       global: {
-        fetch: (url, options = {}) => fetch(url, { ...options, cache: "no-store" }),
+        fetch: (url: RequestInfo | URL, options: RequestInit = {}) =>
+          fetch(url, { ...options, cache: "no-store" }),
       },
     }
   );
