@@ -39,6 +39,12 @@ export async function middleware(request: NextRequest) {
         );
       },
     },
+    // Erzwingt frische Daten bei jedem Request (siehe lib/supabase/server.ts
+    // für die ausführliche Begründung) - verhindert, dass die Middleware
+    // nach einer Admin-Freigabe noch eine veraltete is_approved-Antwort sieht.
+    global: {
+      fetch: (url, options = {}) => fetch(url, { ...options, cache: "no-store" }),
+    },
   });
 
   let userId: string | null = null;

@@ -12,9 +12,19 @@ Kalender, dieselbe Spielebibliothek und dieselben Events.
    Gruppen-System vollständig, macht die Spielebibliothek global, stellt
    `date_availability` auf echte `timestamptz`-Spalten um (Über-Mitternacht-
    Support).
+3. `supabase/migrations/004_fix_missed_columns.sql` – **zwingend nötig**,
+   behebt zwei Bugs aus Migration 003: `games` fehlte die Spalte
+   `created_by` (Spiele anlegen schlug fehl), `date_availability` hatte
+   noch eine verwaiste NOT-NULL-Spalte `date` (jede neue Verfügbarkeit
+   schlug fehl, nicht nur Über-Mitternacht-Fenster).
+4. `supabase/migrations/005_fix_recurring_overnight_constraint.sql` –
+   **zwingend nötig**, entfernt eine Legacy-Constraint aus der
+   allerersten Schema-Version (`end_time > start_time` auf
+   `recurring_availability`), die Über-Mitternacht-Zeiten bei
+   wiederkehrenden Verfügbarkeiten blockiert hat.
 
 **Neuinstallation:** einfach `supabase/schema.sql` ausführen (enthält
-bereits den finalen Stand nach beiden Migrationen).
+bereits den finalen Stand nach allen Migrationen).
 
 ## Was sich mit dem Gruppen-Refactor geändert hat
 

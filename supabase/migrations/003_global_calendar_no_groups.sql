@@ -31,6 +31,11 @@ drop policy if exists "groups: insert authenticated" on public.groups;
 drop policy if exists "group_members: select same group" on public.group_members;
 drop policy if exists "group_members: insert self via invite" on public.group_members;
 
+-- 1b. Alte Hilfs-View aus dem ursprünglichen Schema entfernen - hängt an
+-- recurring_availability.group_id und blockiert sonst den Spalten-Drop
+-- weiter unten ("cannot drop column ... other objects depend on it").
+drop view if exists public.v_recurring_for_weekday;
+
 -- 2. group_id-Spalten entfernen
 alter table public.recurring_availability drop column if exists group_id;
 alter table public.date_availability drop column if exists group_id;

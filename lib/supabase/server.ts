@@ -5,6 +5,13 @@ import { cookies } from "next/headers";
  * Erstellt einen Supabase-Client für Server Components / Server Actions.
  * Liest die Session aus den Next.js-Cookies, damit Row Level Security
  * (auth.uid()) korrekt greift.
+ *
+ * WICHTIG: `global.fetch` erzwingt explizit `cache: "no-store"` für JEDEN
+ * Request an die Supabase-REST-API. Ohne das kann es passieren, dass z. B.
+ * die Middleware nach einer Admin-Freigabe (is_approved = true) noch eine
+ * zwischengespeicherte, veraltete Antwort sieht und Nutzer fälschlich auf
+ * /pending-approval hängen bleiben. Sicherheitshalber explizit statt sich
+ * auf Next.js-Standardverhalten zu verlassen.
  */
 export async function createServerSupabaseClient() {
   const cookieStore = await cookies();
@@ -29,6 +36,9 @@ export async function createServerSupabaseClient() {
             // (Session-Refresh übernimmt dann die Middleware)
           }
         },
+      },
+      global: {
+        fetch: (url, options = {}) => fetch(url, { ...options, cache: "no-store" }),
       },
     }
   );
