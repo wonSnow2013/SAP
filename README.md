@@ -22,6 +22,21 @@ Kalender, dieselbe Spielebibliothek und dieselben Events.
    allerersten Schema-Version (`end_time > start_time` auf
    `recurring_availability`), die Über-Mitternacht-Zeiten bei
    wiederkehrenden Verfügbarkeiten blockiert hat.
+5. `supabase/migrations/006_fix_missing_profiles_select_policy.sql` –
+   **kritisch, zwingend nötig**: Migration 003 hat beim Löschen von
+   `group_members` (per `CASCADE`) versehentlich die Policy mitgelöscht,
+   die normalen Nutzern erlaubte, ihre EIGENE Profilzeile zu lesen.
+   Ohne diesen Fix sieht die App `is_approved` für nicht-Admin/Mod-Nutzer
+   nie korrekt, egal was in der Datenbank steht - sie bleiben dauerhaft
+   auf `/pending-approval` hängen.
+6. `supabase/migrations/007_backfill_missing_profiles.sql` – legt für
+   "Alt-Accounts" (registriert bevor der `handle_new_user()`-Trigger
+   existierte) nachträglich eine `profiles`-Zeile an. Ohne Profil loggt
+   Supabase solche Nutzer bei jedem Magic-Link einfach in ihren
+   bestehenden Account ein (kein neuer Sign-up, Trigger feuert nie), sie
+   bleiben ohne dieses Backfill dauerhaft ohne Profil hängen. Der
+   Auth-Callback (`app/auth/callback/route.ts`) legt so ein fehlendes
+   Profil zusätzlich automatisch an, falls es doch nochmal vorkommt.
 
 **Neuinstallation:** einfach `supabase/schema.sql` ausführen (enthält
 bereits den finalen Stand nach allen Migrationen).

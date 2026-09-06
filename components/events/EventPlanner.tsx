@@ -357,17 +357,42 @@ function RsvpList({
   members: Profile[];
   currentUserId: string;
 }) {
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const myStatus = event.participants.find((p) => p.userId === currentUserId)?.status;
+  // Optimistisches Overlay: sofortiges visuelles Feedback, bevor die
+  // Server-Antwort/der Refresh durch ist. Wird von `byUser` bevorzugt
+  // ausgewertet, damit der Klick sich nicht "tot" anfühlt.
+  const [optimisticStatus, setOptimisticStatus] = useState<
+    "accepted" | "declined" | "maybe" | null
+  >(null);
+  const myStatus =
+    optimisticStatus ?? event.participants.find((p) => p.userId === currentUserId)?.status;
 
   function respond(status: "accepted" | "declined" | "maybe") {
-    startTransition(() => respondToEvent(event.id, status));
+    setOptimisticStatus(status);
+    startTransition(async () => {
+      try {
+        await respondToEvent(event.id, status);
+        toast.success(
+          status === "accepted"
+            ? "Zugesagt!"
+            : status === "declined"
+              ? "Abgesagt."
+              : "Als 'Vielleicht' markiert."
+        );
+        router.refresh();
+      } catch (err) {
+        setOptimisticStatus(null);
+        toast.error(err instanceof Error ? err.message : "Antwort konnte nicht gespeichert werden.");
+      }
+    });
   }
 
   const byUser = useMemo(() => {
     const map = new Map(event.participants.map((p) => [p.userId, p.status]));
+    if (optimisticStatus) map.set(currentUserId, optimisticStatus);
     return map;
-  }, [event.participants]);
+  }, [event.participants, optimisticStatus, currentUserId]);
 
   return (
     <section>
