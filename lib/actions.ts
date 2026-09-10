@@ -324,13 +324,31 @@ export async function createEvent(input: {
   const { data: users } = await supabase.from("profiles").select("id").eq("is_approved", true);
 
   if (users?.length) {
-    await supabase.from("event_participants").insert(
+    // WICHTIG: Der reguläre RLS-gebundene Client darf laut Policy nur die
+    // EIGENE event_participants-Zeile einfügen (user_id = auth.uid()).
+    // Da wir hier aber für ALLE freigegebenen Nutzer eine Einladung
+    // anlegen (Massen-Insert in EINEM Statement), würde das an der
+    // Policy für jede fremde Zeile scheitern - und Postgres verwirft bei
+    // einem Mehrzeilen-INSERT die GESAMTE Anfrage, sobald auch nur eine
+    // Zeile die RLS-Prüfung nicht besteht (also auch die eigene Zeile
+    // wäre betroffen). Deshalb hier bewusst der Service-Role-Client, der
+    // RLS für diesen systemseitigen Schritt gezielt umgeht.
+    const { createAdminSupabaseClient } = await import("@/lib/supabase/admin");
+    const adminClient = createAdminSupabaseClient();
+
+    const { error: participantsError } = await adminClient.from("event_participants").insert(
       users.map((u) => ({
         event_id: event.id,
         user_id: u.id,
         status: u.id === auth.user!.id ? "accepted" : "invited",
       }))
     );
+    if (participantsError) {
+      throw new Error(
+        "Event wurde angelegt, aber Teilnehmer konnten nicht eingetragen werden: " +
+          participantsError.message
+      );
+    }
   }
 
   await maybeNotifyDiscord("event_confirmed", event);

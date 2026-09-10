@@ -37,6 +37,17 @@ Kalender, dieselbe Spielebibliothek und dieselben Events.
    bleiben ohne dieses Backfill dauerhaft ohne Profil hängen. Der
    Auth-Callback (`app/auth/callback/route.ts`) legt so ein fehlendes
    Profil zusätzlich automatisch an, falls es doch nochmal vorkommt.
+7. `supabase/migrations/008_backfill_event_participants.sql` –
+   **zwingend nötig**: `createEvent()` versuchte bisher, in einem
+   einzigen Mehrzeilen-INSERT für ALLE freigegebenen Nutzer eine
+   `event_participants`-Zeile anzulegen. Die RLS-Policy erlaubte aber
+   nur das Einfügen der eigenen Zeile - bei einem Mehrzeilen-INSERT
+   verwirft Postgres die GESAMTE Anfrage, sobald eine Zeile die Regel
+   verletzt. Für JEDES bisher erstellte Event fehlten dadurch alle
+   Teilnehmer-Zeilen, RSVP-Klicks liefen ins Leere. `lib/actions.ts`
+   nutzt für diesen Insert jetzt den Service-Role-Client (umgeht RLS
+   gezielt für diesen systemseitigen Schritt); dieses Backfill repariert
+   bereits bestehende Events nachträglich.
 
 **Neuinstallation:** einfach `supabase/schema.sql` ausführen (enthält
 bereits den finalen Stand nach allen Migrationen).
