@@ -91,6 +91,21 @@ function addDays(dateStr: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Montag-Sonntag der aktuellen Woche (Server läuft i. d. R. in UTC). */
+function getCurrentWeekRange(): { from: string; to: string } {
+  const now = new Date();
+  const day = now.getUTCDay(); // 0 = Sonntag ... 6 = Samstag
+  const diffToMonday = (day + 6) % 7;
+  const monday = new Date(now);
+  monday.setUTCDate(now.getUTCDate() - diffToMonday);
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  return {
+    from: monday.toISOString().slice(0, 10),
+    to: sunday.toISOString().slice(0, 10),
+  };
+}
+
 // ---------------------------------------------------------------------
 // Verfügbarkeiten: "Meine Verfügbarkeiten" - Übersicht, Bearbeiten, Löschen
 // ---------------------------------------------------------------------
@@ -330,9 +345,9 @@ export async function createEvent(input: {
     // anlegen (Massen-Insert in EINEM Statement), würde das an der
     // Policy für jede fremde Zeile scheitern - und Postgres verwirft bei
     // einem Mehrzeilen-INSERT die GESAMTE Anfrage, sobald auch nur eine
-    // Zeile die RLS-Prüfung nicht besteht (also auch die eigene Zeile
-    // wäre betroffen). Deshalb hier bewusst der Service-Role-Client, der
-    // RLS für diesen systemseitigen Schritt gezielt umgeht.
+    // Zeile die RLS-Prüfung nicht besteht. Deshalb hier bewusst der
+    // Service-Role-Client, der RLS für diesen systemseitigen Schritt
+    // gezielt umgeht.
     const { createAdminSupabaseClient } = await import("@/lib/supabase/admin");
     const adminClient = createAdminSupabaseClient();
 
@@ -386,10 +401,14 @@ export async function deleteEvent(eventId: string) {
   revalidatePath("/dashboard");
 }
 
-/** Alle anstehenden (nicht abgesagten) Events, global für die ganze App. */
+/**
+ * Events der AKTUELLEN WOCHE (Montag-Sonntag, ab heute), nicht mehr alle
+ * zukünftigen Events - für die "Diese Woche"-Liste im Dashboard.
+ */
 export async function getUpcomingEvents() {
   const supabase = await createServerSupabaseClient();
   const today = new Date().toISOString().slice(0, 10);
+  const { to: weekEnd } = getCurrentWeekRange();
 
   const { data, error } = await supabase
     .from("events")
@@ -401,7 +420,29 @@ export async function getUpcomingEvents() {
     )
     .neq("status", "cancelled")
     .gte("event_date", today)
+    .lte("event_date", weekEnd)
     .order("event_date", { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/**
+ * Minimal-Infos zu allen (nicht abgesagten) Events in einem Datumsbereich -
+ * für die Kalender-Markierung "an diesem Tag ist schon was geplant".
+ * Deckt bewusst einen GRÖSSEREN Zeitraum ab als getUpcomingEvents()
+ * (z. B. den ganzen sichtbaren Monat), damit auch Termine außerhalb der
+ * aktuellen Woche im Kalender als "belegt" markiert werden.
+ */
+export async function getEventsInRange(from: string, to: string) {
+  const supabase = await createServerSupabaseClient();
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, event_date")
+    .neq("status", "cancelled")
+    .gte("event_date", from)
+    .lte("event_date", to);
 
   if (error) throw new Error(error.message);
   return data;
