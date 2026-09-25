@@ -3,20 +3,28 @@
 // =====================================================================
 // MatchScoreCalendar
 // Zeigt die Top-3-Tage als hervorgehobene Karten + eine Monatsansicht,
-// eingefärbt nach Match-Score. OverlapWindow nutzt jetzt startAt/endAt
-// (volle ISO-Timestamps) statt startTime/endTime, damit Über-Mitternacht-
-// Fenster korrekt dargestellt werden.
+// eingefärbt nach Match-Score. Tage mit bereits fixiertem Event zeigen
+// zusätzlich einen Punkt-Marker.
+//
+// WICHTIG (Bugfix): Das angeklickte Datum wird aus den LOKALEN
+// Datumskomponenten (getFullYear/getMonth/getDate) zusammengesetzt statt
+// über date.toISOString(), da toISOString() immer nach UTC konvertiert.
+// In Zeitzonen östlich von UTC (z. B. Deutschland, UTC+1/+2) führte das
+// dazu, dass z. B. ein Klick auf den 9. den 8. öffnete, weil Mitternacht
+// lokal in UTC noch der Vortag ist.
 // =====================================================================
 
 import { useMemo, useState } from "react";
-import { Sparkles, Users, Clock, ChevronLeft, ChevronRight, Moon } from "lucide-react";
+import { Sparkles, Users, Clock, ChevronLeft, ChevronRight, Moon, CalendarCheck2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DayMatch } from "@/types";
 
 interface MatchScoreCalendarProps {
   monthMatches: DayMatch[];
   topDays: DayMatch[];
-  onSelectDay: (date: string) => void;
+  /** ISO-Datum (lokal korrekt, siehe toISODate) -> Event-ID, für Tage mit bereits fixiertem Termin. */
+  eventsByDate?: Record<string, string>;
+  onSelectDay: (date: string, existingEventId?: string) => void;
   initialMonth?: Date;
 }
 
@@ -28,12 +36,10 @@ function scoreToColor(score: number): string {
   return "bg-slate-50 text-slate-300";
 }
 
-/** "HH:mm" aus einem ISO-Timestamp extrahieren (UTC, da wir intern konsequent in UTC rechnen). */
 function timeOf(iso: string): string {
   return iso.slice(11, 16);
 }
 
-/** Geht das Fenster über Mitternacht (Start- und Endtag unterschiedlich)? */
 function spansMidnight(startAt: string, endAt: string): boolean {
   return startAt.slice(0, 10) !== endAt.slice(0, 10);
 }
@@ -41,6 +47,7 @@ function spansMidnight(startAt: string, endAt: string): boolean {
 export function MatchScoreCalendar({
   monthMatches,
   topDays,
+  eventsByDate = {},
   onSelectDay,
   initialMonth = new Date(),
 }: MatchScoreCalendarProps) {
@@ -65,7 +72,7 @@ export function MatchScoreCalendar({
           {topDays.map((day, idx) => (
             <button
               key={day.date}
-              onClick={() => onSelectDay(day.date)}
+              onClick={() => onSelectDay(day.date, eventsByDate[day.date])}
               className={cn(
                 "group relative overflow-hidden rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-lg",
                 idx === 0
@@ -100,6 +107,12 @@ export function MatchScoreCalendar({
                   </span>
                 )}
               </div>
+              {eventsByDate[day.date] && (
+                <span className="mt-2 flex items-center gap-1 text-xs font-medium text-emerald-600">
+                  <CalendarCheck2 className="h-3.5 w-3.5" />
+                  Bereits geplant
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -141,24 +154,39 @@ export function MatchScoreCalendar({
             if (!date) return <div key={i} />;
             const iso = toISODate(date);
             const match = matchByDate.get(iso);
+            const existingEventId = eventsByDate[iso];
             const inCurrentMonth = date.getMonth() === month.getMonth();
 
             return (
               <button
                 key={iso}
-                onClick={() => onSelectDay(iso)}
+                onClick={() => onSelectDay(iso, existingEventId)}
                 disabled={!inCurrentMonth}
                 className={cn(
-                  "aspect-square rounded-lg text-sm font-medium transition-transform hover:scale-105 disabled:opacity-30",
+                  "relative aspect-square rounded-lg text-sm font-medium transition-transform hover:scale-105 disabled:opacity-30",
                   match ? scoreToColor(match.matchScore) : "bg-slate-50 text-slate-400"
                 )}
-                title={match ? `Match-Score: ${match.matchScore.toFixed(0)}` : undefined}
+                title={
+                  existingEventId
+                    ? "Spielabend bereits geplant"
+                    : match
+                      ? `Match-Score: ${match.matchScore.toFixed(0)}`
+                      : undefined
+                }
               >
                 {date.getDate()}
+                {existingEventId && (
+                  <span className="absolute bottom-1 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-violet-600" />
+                )}
               </button>
             );
           })}
         </div>
+
+        <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-400">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-violet-600" />
+          Tag hat bereits einen geplanten Spielabend
+        </p>
       </section>
     </div>
   );
@@ -184,8 +212,16 @@ function shiftMonth(date: Date, delta: number): Date {
   return new Date(date.getFullYear(), date.getMonth() + delta, 1);
 }
 
+/**
+ * Wandelt ein Date-Objekt in ein "YYYY-MM-DD"-Datum um, basierend auf den
+ * LOKALEN Datumskomponenten - NICHT über toISOString() (das würde nach
+ * UTC konvertieren und in vielen Zeitzonen einen Tag verschieben).
+ */
 function toISODate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 function formatWeekdayDate(iso: string): string {

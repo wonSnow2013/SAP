@@ -13,17 +13,28 @@ interface UpcomingEventRow {
   event_participants: { user_id: string; status: string }[];
 }
 
-/** Zeigt alle bereits fixierten, anstehenden Spielabende (global). */
-export function UpcomingEventsList({ events }: { events: UpcomingEventRow[] }) {
+/**
+ * Zeigt bereits fixierte Spielabende. `title` ist konfigurierbar, damit
+ * dieselbe Komponente sowohl für "Diese Woche" (Dashboard) als auch für
+ * eine ungefilterte Liste (falls später gebraucht) genutzt werden kann.
+ */
+export function UpcomingEventsList({
+  events,
+  title = "Anstehende Spielabende",
+}: {
+  events: UpcomingEventRow[];
+  title?: string;
+}) {
   if (events.length === 0) {
     return (
       <section>
         <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold text-slate-900">
           <CalendarDays className="h-5 w-5 text-violet-500" />
-          Anstehende Spielabende
+          {title}
         </h2>
         <p className="rounded-xl border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400">
-          Noch nichts fixiert – wähl oben einen Top-Tag aus, um einen Spielabend zu planen.
+          Diese Woche ist noch nichts fixiert – wähl unten einen Top-Tag aus, um einen
+          Spielabend zu planen.
         </p>
       </section>
     );
@@ -33,7 +44,7 @@ export function UpcomingEventsList({ events }: { events: UpcomingEventRow[] }) {
     <section>
       <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold text-slate-900">
         <CalendarDays className="h-5 w-5 text-violet-500" />
-        Anstehende Spielabende
+        {title}
       </h2>
       <div className="space-y-2">
         {events.map((event) => {
